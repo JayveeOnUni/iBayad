@@ -73,6 +73,7 @@ export default function AttendancePage() {
   const absent = useMemo(() => attendance.filter((a) => a.status === 'absent').length, [attendance])
   const late = useMemo(() => attendance.filter((a) => a.status === 'late').length, [attendance])
   const offsetEarned = useMemo(() => attendance.reduce((sum, a) => sum + a.offsetEarnedMinutes, 0), [attendance])
+  const overtime = useMemo(() => attendance.reduce((sum, a) => sum + a.overtimeHours, 0), [attendance])
 
   const submitCorrection = async () => {
     try {
@@ -162,11 +163,12 @@ export default function AttendancePage() {
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
           {[
             { label: 'Days Present', value: present, color: 'text-success' },
             { label: 'Days Absent', value: absent, color: 'text-danger' },
             { label: 'Late Days', value: late, color: 'text-warning' },
+            { label: 'Overtime', value: `${overtime.toFixed(1)}h`, color: 'text-info' },
             { label: 'Offset Available', value: minutesLabel(offsetBalance?.availableMinutes ?? 0), color: 'text-brand' },
             { label: 'Offset Earned', value: minutesLabel(offsetEarned), color: 'text-info' },
           ].map((s) => (
@@ -204,6 +206,9 @@ export default function AttendancePage() {
                 )}
                 {a.offsetUsedMinutes > 0 && (
                   <span className="text-xs text-info font-medium">-{minutesLabel(a.offsetUsedMinutes)} used</span>
+                )}
+                {a.overtimeHours > 0 && (
+                  <span className="text-xs text-info font-medium">+{a.overtimeHours.toFixed(1)}h OT</span>
                 )}
                 <Badge variant={statusVariant[a.status]} dot>
                   {a.status}

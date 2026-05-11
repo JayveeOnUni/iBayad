@@ -174,7 +174,7 @@ export const getAttendanceSummary = asyncHandler(async (req: Request, res: Respo
        COALESCE(SUM(offset_used_minutes), 0) AS total_offset_used_minutes,
        ROUND(COALESCE(SUM(offset_earned_minutes), 0) / 60.0, 2) AS total_offset_earned_hours,
        ROUND(COALESCE(SUM(offset_used_minutes), 0) / 60.0, 2) AS total_offset_used_hours,
-       0 AS total_overtime_hours,
+       ROUND(COALESCE(SUM(overtime_hours), 0), 2) AS total_overtime_hours,
        COALESCE(SUM(total_worked_minutes), 0) AS total_worked_minutes
      FROM attendance
      WHERE employee_id = $1

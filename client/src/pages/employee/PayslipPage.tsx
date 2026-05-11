@@ -119,6 +119,7 @@ export default function PayslipPage() {
                 <div className="space-y-2">
                   {[
                     { label: 'Basic Pay', value: selectedPayslip.basicPay },
+                    { label: 'Overtime Pay', value: selectedPayslip.overtimePay },
                     { label: 'Holiday Pay', value: selectedPayslip.holidayPay },
                     { label: 'Allowances', value: selectedPayslip.allowances },
                   ].map((row) => (

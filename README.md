@@ -250,6 +250,30 @@ Demo accounts:
 
 Change these passwords immediately for any shared or deployed environment.
 
+### 8. Seed the full-month demo employee
+
+For presentations, you can add a dedicated fake employee account with a complete April 2026 attendance month and a released payroll record:
+
+```bash
+cd server
+npm run seed:demo-employee
+```
+
+Demo employee credentials:
+
+| Role | Email | Password |
+| --- | --- | --- |
+| Employee | `employee.demo@example.com` | `DemoEmployee@2026` |
+
+This seed creates `EMP-DEMO-2026-001` / `Mikaela Demo Reyes` with:
+
+- 30 April 2026 attendance rows
+- Working days, rest days, late records, undertime, overtime, and one absence
+- A released `Demo April 2026 Full Month` payroll period and payslip-ready payroll record
+- Fake-only employee, government ID, bank, address, phone, and email data
+
+The seed is idempotent. Rerunning `npm run seed:demo-employee` resets only this demo employee, their attendance, payroll, offset, loan, leave, and account records, then recreates the clean demo state.
+
 ## Running the Application
 
 Open two terminals.

@@ -72,18 +72,22 @@ export function computePayroll(input: PayrollInput): PayrollResult {
 
   const dailyRate = getDailyRate(input.basicSalary, workDaysPerMonth)
   const hourlyRate = getHourlyRate(dailyRate, workHoursPerDay)
+  const scheduledWorkDays = input.daysWorked + input.absenceDays
+  const deductibleTimeMinutes =
+    input.lateMins + Math.max(0, input.undertimeMinutes - input.lateMins)
 
   // Earnings
-  const regularPay = Math.round(dailyRate * input.daysWorked * 100) / 100
-  const overtimePay = 0
+  const regularPay = Math.round(dailyRate * scheduledWorkDays * 100) / 100
+  const overtimePay = Math.round(hourlyRate * input.overtimeHours * 1.25 * 100) / 100
   const holidayPay = Math.round(hourlyRate * input.holidayHours * 2.0 * 100) / 100
   const nightDiffPay = 0
 
-  const grossPay = regularPay + holidayPay + input.allowances + input.otherEarnings
+  const grossPay = regularPay + overtimePay + holidayPay + input.allowances + input.otherEarnings
 
-  // Absence & late deductions
+  // Absence and time-based deductions. Late minutes can also reduce rendered time,
+  // so only undertime beyond late minutes is added to avoid double-counting.
   const absenceDeduction = Math.round(dailyRate * input.absenceDays * 100) / 100
-  const lateDeduction = Math.round(hourlyRate * (input.lateMins / 60) * 100) / 100
+  const lateDeduction = Math.round(hourlyRate * (deductibleTimeMinutes / 60) * 100) / 100
 
   // Government contributions based on basic salary
   const deductions = computeDeductions(input.basicSalary)
@@ -215,7 +219,7 @@ export async function processBatchPayroll(payrollPeriodId: string, db: Queryable
     `SELECT e.id, e.basic_salary, e.work_days_per_month, e.work_hours_per_day,
             COALESCE(SUM(CASE WHEN a.status = 'absent' THEN 1 ELSE 0 END), 0) AS absence_days,
             COALESCE(SUM(CASE WHEN a.status = 'late' THEN a.late_minutes ELSE 0 END), 0) AS late_mins,
-            0 AS overtime_hours,
+            COALESCE(SUM(a.overtime_hours), 0) AS overtime_hours,
             COALESCE(SUM(a.holiday_hours), 0) AS holiday_hours,
             0 AS night_diff_hours,
             COALESCE(SUM(a.excess_minutes), 0) AS excess_minutes,
