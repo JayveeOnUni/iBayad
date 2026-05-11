@@ -47,7 +47,5 @@ export const employeeService = {
     api.delete<ApiResponse<void>>(`/employees/${id}`),
 
   exportCsv: () =>
-    fetch('/api/employees/export/csv', {
-      headers: { Authorization: `Bearer ${localStorage.getItem('accessToken')}` },
-    }),
+    api.raw('/employees/export/csv'),
 }

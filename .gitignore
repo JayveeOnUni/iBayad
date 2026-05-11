@@ -9,8 +9,14 @@ server/dist/
 
 # Environment variables
 .env
+.env.*
+!.env.example
 server/.env
+server/.env.*
+!server/.env.example
 client/.env
+client/.env.*
+!client/.env.example
 
 # Logs
 *.log

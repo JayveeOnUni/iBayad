@@ -8,6 +8,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "lint": "eslint src/**/*.ts",
+    "db:migrate": "node scripts/migrate.js",
+    "admin:create": "node scripts/create-admin.js",
     "seed:demo-employee": "node scripts/run-sql-file.js src/db/seed-demo-employee-attendance.sql"
   },
   "dependencies": {

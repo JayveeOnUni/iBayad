@@ -51,7 +51,10 @@ function createActivationToken() {
 }
 
 function buildActivationLink(token: string): string {
-  const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173'
+  const clientUrl =
+    process.env.CLIENT_URL ||
+    process.env.CORS_ORIGIN?.split(',')[0]?.trim() ||
+    'http://localhost:5173'
   const url = new URL('/account/activate', clientUrl)
   url.searchParams.set('token', token)
   return url.toString()

@@ -19,10 +19,63 @@ dotenv.config()
 const app = express()
 const PORT = Number(process.env.PORT) || 3001
 
+function parseOrigins(value: string | undefined): string[] {
+  return value
+    ? value.split(',').map((origin) => origin.trim().replace(/\/+$/, '')).filter(Boolean)
+    : []
+}
+
+function getAllowedOrigins(): string[] {
+  const configuredOrigins = [
+    ...parseOrigins(process.env.CORS_ORIGIN),
+    ...parseOrigins(process.env.CLIENT_URL),
+  ]
+  if (configuredOrigins.length > 0) return configuredOrigins
+  return process.env.NODE_ENV === 'production' ? [] : ['http://localhost:5173']
+}
+
+function validateProductionConfig(): void {
+  if (process.env.NODE_ENV !== 'production') return
+
+  const required = ['JWT_SECRET', 'JWT_REFRESH_SECRET']
+  if (!process.env.DATABASE_URL) {
+    required.push('DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD')
+  }
+  if (!process.env.CORS_ORIGIN && !process.env.CLIENT_URL) {
+    required.push('CORS_ORIGIN')
+  }
+
+  const missing = required.filter((name) => !process.env[name])
+  if (missing.length > 0) {
+    throw new Error(`Missing required production environment variables: ${missing.join(', ')}`)
+  }
+
+  const weakSecrets = ['JWT_SECRET', 'JWT_REFRESH_SECRET'].filter((name) => {
+    const value = process.env[name]?.trim() ?? ''
+    return value.startsWith('replace_with_') || value.length < 32
+  })
+  if (weakSecrets.length > 0) {
+    throw new Error(`Production JWT secrets must be unique random values at least 32 characters long: ${weakSecrets.join(', ')}`)
+  }
+
+  if (process.env.JWT_SECRET === process.env.JWT_REFRESH_SECRET) {
+    throw new Error('JWT_SECRET and JWT_REFRESH_SECRET must be different in production')
+  }
+}
+
+validateProductionConfig()
+const allowedOrigins = getAllowedOrigins()
+
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true)
+      return
+    }
+    callback(new Error(`Origin ${origin} is not allowed by CORS`))
+  },
   credentials: true,
 }))
 
@@ -67,9 +120,9 @@ app.use(errorHandler)
 // ─── Start ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`\n iBayad Payroll API`)
-  console.log(` Running on: http://localhost:${PORT}`)
+  console.log(` Listening on port: ${PORT}`)
   console.log(` Environment: ${process.env.NODE_ENV || 'development'}`)
-  console.log(` Health check: http://localhost:${PORT}/api/health\n`)
+  console.log(` Health check path: /api/health\n`)
 })
 
 export default app

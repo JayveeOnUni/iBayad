@@ -1,6 +1,5 @@
 import { api } from './api'
 import type { PayrollPeriod, ApiResponse, PaginatedResponse, PayrollWarning } from '../types'
-import { useAuthStore } from '../store/authStore'
 import { mapPayrollPeriod, mapPayrollRecord } from './mappers'
 
 export interface PayrollListParams {
@@ -90,9 +89,7 @@ export const payrollService = {
       .then((res) => ({ ...res, data: mapPayrollPeriod(res.data) })),
 
   generatePayslip: (recordId: string) =>
-    fetch(`/api/payroll/records/${recordId}/payslip`, {
-      headers: { Authorization: `Bearer ${useAuthStore.getState().tokens?.accessToken ?? ''}` },
-    }),
+    api.raw(`/payroll/records/${recordId}/payslip`),
 
   getMyPayslips: (params?: Record<string, string | number | boolean>) =>
     api.get<RawPaginated<RawRow>>('/payroll/my-records', params)
