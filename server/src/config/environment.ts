@@ -69,6 +69,26 @@ function parsePositiveInteger(name: string, fallback: number): number {
   return parsed
 }
 
+export function isSmtpReadinessRequired(): boolean {
+  return parseBoolean('REQUIRE_SMTP_READY', false)
+}
+
+export function getSafeSmtpConfigForLogging(): {
+  SMTP_HOST?: string
+  SMTP_PORT: string
+  SMTP_SECURE: string
+} {
+  const host = process.env.SMTP_HOST?.trim()
+  const port = process.env.SMTP_PORT?.trim()
+  const secure = process.env.SMTP_SECURE?.trim()
+
+  return {
+    ...(host ? { SMTP_HOST: host } : {}),
+    SMTP_PORT: port || '587',
+    SMTP_SECURE: secure || 'false',
+  }
+}
+
 function validateClientUrl(value: string): void {
   let url: URL
 
@@ -186,17 +206,16 @@ export function validateSmtpSecurityPairing(
 export function validateProductionConfig(): void {
   if (!isProduction()) return
 
+  const requireSmtpReady = isSmtpReadinessRequired()
   const required = [
     'JWT_SECRET',
     'JWT_REFRESH_SECRET',
-    'SMTP_HOST',
-    'SMTP_PORT',
-    'SMTP_SECURE',
-    'SMTP_USER',
-    'SMTP_PASS',
-    'SMTP_FROM',
     'CLIENT_URL',
   ]
+
+  if (requireSmtpReady) {
+    required.push('SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURE')
+  }
 
   if (!process.env.DATABASE_URL) {
     required.push('DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD')
@@ -220,5 +239,7 @@ export function validateProductionConfig(): void {
   }
 
   validateClientUrl(process.env.CLIENT_URL!)
-  getSmtpEnvironmentConfig()
+  if (requireSmtpReady) {
+    getSmtpEnvironmentConfig()
+  }
 }

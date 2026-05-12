@@ -14,7 +14,11 @@ import adminDashboardRoutes from './routes/adminDashboard'
 // Middleware
 import { asyncHandler, errorHandler } from './middleware/errorHandler'
 import { authenticate, requireRole } from './middleware/auth'
-import { validateProductionConfig } from './config/environment'
+import {
+  getSafeSmtpConfigForLogging,
+  isSmtpReadinessRequired,
+  validateProductionConfig,
+} from './config/environment'
 import { assertSmtpReady, verifySmtpConnection } from './services/emailService'
 import { logger } from './utils/logger'
 
@@ -22,6 +26,7 @@ dotenv.config()
 
 const app = express()
 const PORT = Number(process.env.PORT) || 3001
+const HOST = '0.0.0.0'
 
 function parseOrigins(value: string | undefined): string[] {
   return value
@@ -115,19 +120,56 @@ app.use((_req: Request, res: Response): void => {
 app.use(errorHandler)
 
 // ─── Start ────────────────────────────────────────────────────────────────────
+function shouldCheckSmtpOnStartup(requireSmtpReady: boolean): boolean {
+  return requireSmtpReady || process.env.NODE_ENV === 'production'
+}
+
+function logSmtpStartupConfig(requireSmtpReady: boolean): void {
+  logger.info('SMTP startup configuration', {
+    ...getSafeSmtpConfigForLogging(),
+    requireSmtpReady,
+  })
+}
+
+async function runOptionalSmtpReadinessCheck(): Promise<void> {
+  const readiness = await verifySmtpConnection()
+  if (!readiness.ready) {
+    logger.warn('SMTP readiness check failed; continuing because REQUIRE_SMTP_READY is not true', {
+      ...getSafeSmtpConfigForLogging(),
+      message: readiness.message,
+    })
+  }
+}
+
 async function startServer(): Promise<void> {
   try {
-    if (process.env.NODE_ENV === 'production') {
+    const requireSmtpReady = isSmtpReadinessRequired()
+
+    if (shouldCheckSmtpOnStartup(requireSmtpReady)) {
+      logSmtpStartupConfig(requireSmtpReady)
+    }
+
+    if (requireSmtpReady) {
       await assertSmtpReady()
     }
 
-    app.listen(PORT, (): void => {
+    app.listen(PORT, HOST, (): void => {
       logger.info('iBayad Payroll API started', {
+        host: HOST,
         port: PORT,
         environment: process.env.NODE_ENV || 'development',
         healthCheckPath: '/api/health',
       })
     })
+
+    if (!requireSmtpReady && shouldCheckSmtpOnStartup(requireSmtpReady)) {
+      void runOptionalSmtpReadinessCheck().catch((error) => {
+        logger.error('SMTP readiness check errored; server remains online because REQUIRE_SMTP_READY is not true', {
+          ...getSafeSmtpConfigForLogging(),
+          error,
+        })
+      })
+    }
   } catch (error) {
     logger.error('Server startup failed', { error })
     process.exit(1)

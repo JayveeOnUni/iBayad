@@ -312,6 +312,35 @@ http://localhost:5173
 
 During local development, Vite proxies `/api` requests to `http://localhost:3001`.
 
+## Backend Deployment on Render
+
+For the backend web service, set the Render root directory to `server`.
+
+Build command:
+
+```bash
+npm install && npm run build
+```
+
+Start command:
+
+```bash
+npm start
+```
+
+Recommended Render environment variables:
+
+```env
+NODE_ENV=production
+NODE_VERSION=22
+REQUIRE_SMTP_READY=false
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SECURE=false
+```
+
+Also set the production database, JWT, CORS/client URL, and SMTP credential variables in Render. Keep `REQUIRE_SMTP_READY=false` unless deployment should fail when SMTP is unreachable; email routes will still return a clear error if SMTP cannot send.
+
 ## Useful Scripts
 
 ### Frontend

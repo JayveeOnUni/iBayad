@@ -1,6 +1,10 @@
 import nodemailer, { type SendMailOptions, type Transporter } from 'nodemailer'
 import type SMTPTransport from 'nodemailer/lib/smtp-transport'
-import { getSmtpEnvironmentConfig, type SmtpEnvironmentConfig } from '../config/environment'
+import {
+  getSafeSmtpConfigForLogging,
+  getSmtpEnvironmentConfig,
+  type SmtpEnvironmentConfig,
+} from '../config/environment'
 import { logger } from '../utils/logger'
 
 type EmailType = 'activation' | 'password_reset' | string
@@ -47,11 +51,13 @@ export interface SmtpReadinessResult {
 
 export class EmailDeliveryError extends Error {
   emailType: EmailType
+  cause?: unknown
 
-  constructor(emailType: EmailType) {
-    super('Email delivery failed')
+  constructor(emailType: EmailType, cause?: unknown) {
+    super(`Email delivery failed for ${emailType}. SMTP service is unavailable or rejected the message.`)
     this.name = 'EmailDeliveryError'
     this.emailType = emailType
+    this.cause = cause
   }
 }
 
@@ -152,6 +158,16 @@ function getSmtpErrorMetadata(error: unknown): Record<string, unknown> {
   }
 }
 
+function smtpLogConfig(config: SmtpEnvironmentConfig | undefined): Record<string, unknown> {
+  return config
+    ? {
+        SMTP_HOST: config.host,
+        SMTP_PORT: config.port,
+        SMTP_SECURE: config.secure,
+      }
+    : getSafeSmtpConfigForLogging()
+}
+
 function isRetryableSmtpError(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false
 
@@ -184,9 +200,7 @@ export async function verifySmtpConnection(): Promise<SmtpReadinessResult> {
     await mailer.verify()
 
     logger.info('SMTP readiness check succeeded', {
-      smtpHost: config.host,
-      smtpPort: config.port,
-      smtpSecure: config.secure,
+      ...smtpLogConfig(config),
     })
 
     return {
@@ -199,9 +213,7 @@ export async function verifySmtpConnection(): Promise<SmtpReadinessResult> {
     }
   } catch (error) {
     logger.error('SMTP readiness check failed', {
-      smtpHost: config?.host,
-      smtpPort: config?.port,
-      smtpSecure: config?.secure,
+      ...smtpLogConfig(config),
       ...getSmtpErrorMetadata(error),
     })
 
@@ -219,13 +231,27 @@ export async function verifySmtpConnection(): Promise<SmtpReadinessResult> {
 export async function assertSmtpReady(): Promise<void> {
   const readiness = await verifySmtpConnection()
   if (!readiness.ready) {
-    throw new Error('SMTP readiness check failed. Verify SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS, and SMTP_FROM.')
+    throw new Error('SMTP readiness check failed. Verify SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP credentials, and SMTP_FROM.')
   }
 }
 
 export async function sendEmail(input: SendEmailInput): Promise<EmailDeliveryMetadata> {
-  const mailer = createTransporter()
-  const config = getActiveConfig()
+  let mailer: Transporter<SMTPTransport.SentMessageInfo, SMTPTransport.Options>
+  let config: SmtpEnvironmentConfig
+
+  try {
+    mailer = createTransporter()
+    config = getActiveConfig()
+  } catch (error) {
+    logger.warn('Email send failed before SMTP transport was ready', {
+      emailType: input.emailType,
+      recipientDomains: recipientDomains(input.to),
+      ...smtpLogConfig(undefined),
+      ...getSmtpErrorMetadata(error),
+    })
+    throw new EmailDeliveryError(input.emailType, error)
+  }
+
   const attempts = config.sendRetries + 1
   const mailOptions: SendMailOptions = {
     from: config.from,
@@ -271,7 +297,7 @@ export async function sendEmail(input: SendEmailInput): Promise<EmailDeliveryMet
       })
 
       if (!canRetry) {
-        throw new EmailDeliveryError(input.emailType)
+        throw new EmailDeliveryError(input.emailType, error)
       }
 
       await sleep(config.retryDelayMs * attempt)
