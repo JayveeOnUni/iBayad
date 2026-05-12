@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express'
+import { logger } from '../utils/logger'
 
 export interface AppError extends Error {
   statusCode?: number
@@ -18,8 +19,16 @@ export function errorHandler(
   const statusCode = err.statusCode ?? 500
   const message = err.isOperational ? err.message : 'Internal server error'
 
-  if (process.env.NODE_ENV !== 'production') {
-    console.error(`[ERROR] ${err.message}`, err.stack)
+  const logMeta = {
+    statusCode,
+    isOperational: Boolean(err.isOperational),
+    error: err,
+  }
+
+  if (statusCode >= 500) {
+    logger.error('Request error', logMeta)
+  } else {
+    logger.warn('Request error', logMeta)
   }
 
   res.status(statusCode).json({

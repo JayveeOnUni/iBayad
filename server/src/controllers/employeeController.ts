@@ -4,11 +4,16 @@ import { EmployeeModel, type EmployeeRow } from '../models/Employee'
 import { asyncHandler, createError } from '../middleware/errorHandler'
 import pool from '../utils/db'
 import { sendActivationEmail } from '../services/emailService'
+import { buildClientUrl } from '../config/environment'
+import { logger } from '../utils/logger'
 
-const ACTIVATION_EXPIRES_HOURS = Math.max(
-  1,
-  Number(process.env.ACCOUNT_ACTIVATION_EXPIRES_HOURS ?? 72)
-)
+function positiveIntegerEnv(name: string, fallback: number, minimum: number): number {
+  const rawValue = process.env[name]
+  const parsed = rawValue == null || rawValue.trim() === '' ? fallback : Number(rawValue)
+  return Number.isFinite(parsed) ? Math.max(minimum, Math.floor(parsed)) : fallback
+}
+
+const ACTIVATION_EXPIRES_HOURS = positiveIntegerEnv('ACCOUNT_ACTIVATION_EXPIRES_HOURS', 72, 1)
 
 function emptyToNull(value: unknown): string | null {
   if (value == null) return null
@@ -50,35 +55,26 @@ function createActivationToken() {
   return { token, tokenHash, expiresAt }
 }
 
-function buildActivationLink(token: string): string {
-  const clientUrl =
-    process.env.CLIENT_URL ||
-    process.env.CORS_ORIGIN?.split(',')[0]?.trim() ||
-    'http://localhost:5173'
-  const url = new URL('/account/activate', clientUrl)
-  url.searchParams.set('token', token)
-  return url.toString()
-}
-
 async function sendEmployeeActivationLink(employee: Pick<EmployeeRow, 'first_name' | 'last_name' | 'email'>, token: string) {
-  const activationLink = buildActivationLink(token)
+  const activationLink = buildClientUrl('/account/activate', { token })
   try {
-    await sendActivationEmail({
+    const delivery = await sendActivationEmail({
       to: employee.email,
       name: `${employee.first_name} ${employee.last_name}`.trim(),
       activationLink,
       expiresHours: ACTIVATION_EXPIRES_HOURS,
     })
+    return { activationLink, delivery }
   } catch (error) {
-    if (process.env.NODE_ENV !== 'production') {
-      console.error('Unable to send activation email:', error)
-    }
+    logger.error('Unable to send activation email', {
+      employeeEmail: employee.email,
+      error,
+    })
     throw createError(
-      'Employee account was created, but the activation email could not be sent. Check SMTP settings, then resend activation.',
+      'Activation email could not be sent. Check SMTP settings, then try again.',
       502
     )
   }
-  return { activationLink }
 }
 
 export const listEmployees = asyncHandler(async (req: Request, res: Response) => {
@@ -132,6 +128,7 @@ export const createEmployee = asyncHandler(async (req: Request, res: Response) =
   const client = await pool.connect()
   let employee: EmployeeRow | undefined
   const activation = createActivationToken()
+  let activationLink = ''
   try {
     await client.query('BEGIN')
 
@@ -182,10 +179,21 @@ export const createEmployee = asyncHandler(async (req: Request, res: Response) =
     await client.query(
       `INSERT INTO users (
          employee_id, email, password_hash, role, is_active,
-         activation_token_hash, activation_token_expires_at, activation_sent_at
+         activation_token_hash, activation_token_expires_at
        )
-       VALUES ($1, $2, NULL, 'employee', false, $3, $4, NOW())`,
+       VALUES ($1, $2, NULL, 'employee', false, $3, $4)`,
       [employee.id, employee.email, activation.tokenHash, activation.expiresAt]
+    )
+
+    const delivery = await sendEmployeeActivationLink(employee, activation.token)
+    activationLink = delivery.activationLink
+    await client.query(
+      `UPDATE users
+       SET activation_sent_at = NOW(),
+           activation_email_message_id = $1,
+           updated_at = NOW()
+       WHERE employee_id = $2`,
+      [delivery.delivery.messageId ?? null, employee.id]
     )
 
     await client.query('COMMIT')
@@ -197,7 +205,6 @@ export const createEmployee = asyncHandler(async (req: Request, res: Response) =
   }
 
   if (!employee) throw createError('Unable to create employee account', 500)
-  const { activationLink } = await sendEmployeeActivationLink(employee, activation.token)
 
   res.status(201).json({
     success: true,
@@ -209,36 +216,72 @@ export const createEmployee = asyncHandler(async (req: Request, res: Response) =
 })
 
 export const resendEmployeeActivation = asyncHandler(async (req: Request, res: Response) => {
-  const result = await pool.query(
-    `SELECT u.id AS user_id, u.activated_at, u.password_hash,
-            e.first_name, e.last_name, e.email
-     FROM employees e
-     JOIN users u ON u.employee_id = e.id
-     WHERE e.id = $1 AND u.role = 'employee'`,
-    [req.params.id]
-  )
-
-  const account = result.rows[0]
-  if (!account) throw createError('Employee account not found', 404)
-  if (account.activated_at || account.password_hash) throw createError('Employee account is already activated', 400)
-
+  const client = await pool.connect()
   const activation = createActivationToken()
-  await pool.query(
-    `UPDATE users
-     SET activation_token_hash = $1,
-         activation_token_expires_at = $2,
-         activation_sent_at = NOW(),
-         is_active = false,
-         updated_at = NOW()
-     WHERE id = $3`,
-    [activation.tokenHash, activation.expiresAt, account.user_id]
-  )
+  let account: {
+    user_id: string
+    activated_at: Date | null
+    password_hash: string | null
+    first_name: string
+    last_name: string
+    email: string
+  } | undefined
+  let activationLink = ''
 
-  const { activationLink } = await sendEmployeeActivationLink({
-    first_name: account.first_name,
-    last_name: account.last_name,
-    email: account.email,
-  }, activation.token)
+  try {
+    await client.query('BEGIN')
+
+    const result = await client.query(
+      `SELECT u.id AS user_id, u.activated_at, u.password_hash,
+              e.first_name, e.last_name, e.email
+       FROM employees e
+       JOIN users u ON u.employee_id = e.id
+       WHERE e.id = $1 AND u.role = 'employee'
+       FOR UPDATE OF u`,
+      [req.params.id]
+    )
+
+    account = result.rows[0]
+    if (!account) throw createError('Employee account not found', 404)
+    if (account.activated_at || account.password_hash) throw createError('Employee account is already activated', 400)
+
+    await client.query(
+      `UPDATE users
+       SET activation_token_hash = $1,
+           activation_token_expires_at = $2,
+           activation_sent_at = NULL,
+           activation_email_message_id = NULL,
+           is_active = false,
+           updated_at = NOW()
+       WHERE id = $3`,
+      [activation.tokenHash, activation.expiresAt, account.user_id]
+    )
+
+    const delivery = await sendEmployeeActivationLink({
+      first_name: account.first_name,
+      last_name: account.last_name,
+      email: account.email,
+    }, activation.token)
+    activationLink = delivery.activationLink
+
+    await client.query(
+      `UPDATE users
+       SET activation_sent_at = NOW(),
+           activation_email_message_id = $1,
+           updated_at = NOW()
+       WHERE id = $2`,
+      [delivery.delivery.messageId ?? null, account.user_id]
+    )
+
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+
+  if (!account) throw createError('Employee account not found', 404)
 
   res.json({
     success: true,

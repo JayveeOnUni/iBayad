@@ -5,6 +5,31 @@ import jwt from 'jsonwebtoken'
 import pool from '../utils/db'
 import { asyncHandler, createError } from '../middleware/errorHandler'
 import type { AuthPayload } from '../middleware/auth'
+import { buildClientUrl } from '../config/environment'
+import { sendPasswordResetEmail } from '../services/emailService'
+import { logger } from '../utils/logger'
+
+function positiveIntegerEnv(name: string, fallback: number, minimum: number): number {
+  const rawValue = process.env[name]
+  const parsed = rawValue == null || rawValue.trim() === '' ? fallback : Number(rawValue)
+  return Number.isFinite(parsed) ? Math.max(minimum, Math.floor(parsed)) : fallback
+}
+
+const PASSWORD_RESET_EXPIRES_MINUTES = positiveIntegerEnv('PASSWORD_RESET_EXPIRES_MINUTES', 60, 5)
+
+const PASSWORD_RESET_REQUEST_MESSAGE =
+  'If an active account exists for that email, password reset instructions have been sent.'
+
+function createPasswordResetToken() {
+  const token = crypto.randomBytes(32).toString('base64url')
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex')
+  const expiresAt = new Date(Date.now() + PASSWORD_RESET_EXPIRES_MINUTES * 60 * 1000)
+  return { token, tokenHash, expiresAt }
+}
+
+function employeeDisplayName(user: { first_name?: string | null; last_name?: string | null }): string {
+  return `${user.first_name ?? ''} ${user.last_name ?? ''}`.trim()
+}
 
 function signAccessToken(payload: AuthPayload): string {
   const secret = process.env.JWT_SECRET!
@@ -160,6 +185,117 @@ export const activateAccount = asyncHandler(async (req: Request, res: Response) 
   )
 
   res.json({ success: true, message: 'Account activated successfully. You can now sign in.' })
+})
+
+export const forgotPassword = asyncHandler(async (req: Request, res: Response) => {
+  const email = String(req.body.email ?? '').trim().toLowerCase()
+  if (!email) throw createError('Email is required', 400)
+
+  const client = await pool.connect()
+  let resetLink = ''
+
+  try {
+    await client.query('BEGIN')
+
+    const result = await client.query(
+      `SELECT u.id, u.email, u.is_active, u.password_hash,
+              e.first_name, e.last_name
+       FROM users u
+       LEFT JOIN employees e ON e.id = u.employee_id
+       WHERE LOWER(u.email) = LOWER($1)
+       FOR UPDATE OF u`,
+      [email]
+    )
+
+    const user = result.rows[0]
+    if (!user || !user.is_active || !user.password_hash) {
+      await client.query('COMMIT')
+      res.json({ success: true, message: PASSWORD_RESET_REQUEST_MESSAGE })
+      return
+    }
+
+    const reset = createPasswordResetToken()
+    await client.query(
+      `UPDATE users
+       SET password_reset_token_hash = $1,
+           password_reset_token_expires_at = $2,
+           password_reset_sent_at = NULL,
+           password_reset_email_message_id = NULL,
+           updated_at = NOW()
+       WHERE id = $3`,
+      [reset.tokenHash, reset.expiresAt, user.id]
+    )
+
+    resetLink = buildClientUrl('/reset-password', { token: reset.token })
+    const delivery = await sendPasswordResetEmail({
+      to: user.email,
+      employeeName: employeeDisplayName(user),
+      resetUrl: resetLink,
+      expiresMinutes: PASSWORD_RESET_EXPIRES_MINUTES,
+    })
+
+    await client.query(
+      `UPDATE users
+       SET password_reset_sent_at = NOW(),
+           password_reset_email_message_id = $1,
+           updated_at = NOW()
+       WHERE id = $2`,
+      [delivery.messageId ?? null, user.id]
+    )
+
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK')
+    logger.error('Unable to send password reset email', { email, error })
+    throw createError('Password reset is temporarily unavailable. Please try again later.', 503)
+  } finally {
+    client.release()
+  }
+
+  res.json({
+    success: true,
+    message: PASSWORD_RESET_REQUEST_MESSAGE,
+    ...(process.env.NODE_ENV !== 'production' ? { resetLink } : {}),
+  })
+})
+
+export const resetPassword = asyncHandler(async (req: Request, res: Response) => {
+  const { token, password } = req.body
+  if (!token || !password) throw createError('Reset token and password are required', 400)
+  if (String(password).length < 8) throw createError('Password must be at least 8 characters', 400)
+
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex')
+  const result = await pool.query(
+    `SELECT id, is_active, password_hash, password_reset_token_expires_at
+     FROM users
+     WHERE password_reset_token_hash = $1`,
+    [tokenHash]
+  )
+
+  const user = result.rows[0]
+  if (!user) throw createError('Password reset link is invalid or has already been used', 400)
+  if (!user.is_active || !user.password_hash) throw createError('Password reset is not available for this account', 400)
+
+  const expiresAt = user.password_reset_token_expires_at
+  if (!expiresAt || new Date(expiresAt).getTime() <= Date.now()) {
+    throw createError('Password reset link has expired', 400)
+  }
+
+  const passwordHash = await bcrypt.hash(password, 12)
+  await pool.query(
+    `UPDATE users
+     SET password_hash = $1,
+         refresh_token_hash = NULL,
+         password_reset_token_hash = NULL,
+         password_reset_token_expires_at = NULL,
+         password_reset_sent_at = NULL,
+         password_reset_email_message_id = NULL,
+         updated_at = NOW()
+     WHERE id = $2`,
+    [passwordHash, user.id]
+  )
+
+  res.json({ success: true, message: 'Password reset successfully. You can now sign in.' })
 })
 
 export const logout = asyncHandler(async (req: Request, res: Response) => {

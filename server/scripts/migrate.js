@@ -27,6 +27,10 @@ const migrations = [
     name: '005_leave_management_policy_2022',
     file: 'src/db/add-leave-management-policy-2022.sql',
   },
+  {
+    name: '006_password_reset_email_fields',
+    file: 'src/db/add-password-reset-email-fields.sql',
+  },
 ]
 
 function resolveSqlFile(relativeFile) {

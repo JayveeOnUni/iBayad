@@ -12,7 +12,11 @@ import adminLeaveRoutes from './routes/adminLeaves'
 import adminDashboardRoutes from './routes/adminDashboard'
 
 // Middleware
-import { errorHandler } from './middleware/errorHandler'
+import { asyncHandler, errorHandler } from './middleware/errorHandler'
+import { authenticate, requireRole } from './middleware/auth'
+import { validateProductionConfig } from './config/environment'
+import { assertSmtpReady, verifySmtpConnection } from './services/emailService'
+import { logger } from './utils/logger'
 
 dotenv.config()
 
@@ -34,36 +38,13 @@ function getAllowedOrigins(): string[] {
   return process.env.NODE_ENV === 'production' ? [] : ['http://localhost:5173']
 }
 
-function validateProductionConfig(): void {
-  if (process.env.NODE_ENV !== 'production') return
-
-  const required = ['JWT_SECRET', 'JWT_REFRESH_SECRET']
-  if (!process.env.DATABASE_URL) {
-    required.push('DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD')
-  }
-  if (!process.env.CORS_ORIGIN && !process.env.CLIENT_URL) {
-    required.push('CORS_ORIGIN')
-  }
-
-  const missing = required.filter((name) => !process.env[name])
-  if (missing.length > 0) {
-    throw new Error(`Missing required production environment variables: ${missing.join(', ')}`)
-  }
-
-  const weakSecrets = ['JWT_SECRET', 'JWT_REFRESH_SECRET'].filter((name) => {
-    const value = process.env[name]?.trim() ?? ''
-    return value.startsWith('replace_with_') || value.length < 32
-  })
-  if (weakSecrets.length > 0) {
-    throw new Error(`Production JWT secrets must be unique random values at least 32 characters long: ${weakSecrets.join(', ')}`)
-  }
-
-  if (process.env.JWT_SECRET === process.env.JWT_REFRESH_SECRET) {
-    throw new Error('JWT_SECRET and JWT_REFRESH_SECRET must be different in production')
-  }
+try {
+  validateProductionConfig()
+} catch (error) {
+  logger.error('Production configuration validation failed', { error })
+  process.exit(1)
 }
 
-validateProductionConfig()
 const allowedOrigins = getAllowedOrigins()
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
@@ -82,10 +63,16 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true }))
 
-// Request logger (simple, replace with winston in production)
 app.use((req: Request, _res: Response, next: NextFunction): void => {
-  const ts = new Date().toISOString()
-  console.log(`[${ts}] ${req.method} ${req.path}`)
+  const startedAt = Date.now()
+  _res.on('finish', () => {
+    logger.info('HTTP request completed', {
+      method: req.method,
+      path: req.path,
+      statusCode: _res.statusCode,
+      durationMs: Date.now() - startedAt,
+    })
+  })
   next()
 })
 
@@ -109,6 +96,16 @@ app.get('/api/health', (_req: Request, res: Response): void => {
   })
 })
 
+app.get('/api/admin/readiness/smtp', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
+  const readiness = await verifySmtpConnection()
+
+  res.status(readiness.ready ? 200 : 503).json({
+    success: readiness.ready,
+    message: readiness.message,
+    data: readiness,
+  })
+}))
+
 // 404 handler
 app.use((_req: Request, res: Response): void => {
   res.status(404).json({ success: false, message: 'Route not found' })
@@ -118,11 +115,25 @@ app.use((_req: Request, res: Response): void => {
 app.use(errorHandler)
 
 // ─── Start ────────────────────────────────────────────────────────────────────
-app.listen(PORT, (): void => {
-  console.log(`\n iBayad Payroll API`)
-  console.log(` Listening on port: ${PORT}`)
-  console.log(` Environment: ${process.env.NODE_ENV || 'development'}`)
-  console.log(` Health check path: /api/health\n`)
-})
+async function startServer(): Promise<void> {
+  try {
+    if (process.env.NODE_ENV === 'production') {
+      await assertSmtpReady()
+    }
+
+    app.listen(PORT, (): void => {
+      logger.info('iBayad Payroll API started', {
+        port: PORT,
+        environment: process.env.NODE_ENV || 'development',
+        healthCheckPath: '/api/health',
+      })
+    })
+  } catch (error) {
+    logger.error('Server startup failed', { error })
+    process.exit(1)
+  }
+}
+
+void startServer()
 
 export default app

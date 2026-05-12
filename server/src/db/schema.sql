@@ -129,7 +129,12 @@ CREATE TABLE users (
   activation_token_hash TEXT,
   activation_token_expires_at TIMESTAMPTZ,
   activation_sent_at    TIMESTAMPTZ,
+  activation_email_message_id TEXT,
   activated_at          TIMESTAMPTZ,
+  password_reset_token_hash TEXT,
+  password_reset_token_expires_at TIMESTAMPTZ,
+  password_reset_sent_at TIMESTAMPTZ,
+  password_reset_email_message_id TEXT,
   refresh_token_hash    TEXT,
   last_login_at         TIMESTAMPTZ,
   two_factor_enabled    BOOLEAN DEFAULT false,
@@ -401,6 +406,7 @@ CREATE TABLE system_settings (
 CREATE INDEX idx_employees_department ON employees(department_id);
 CREATE INDEX idx_employees_status ON employees(employment_status);
 CREATE INDEX idx_users_activation_token_hash ON users(activation_token_hash) WHERE activation_token_hash IS NOT NULL;
+CREATE INDEX idx_users_password_reset_token_hash ON users(password_reset_token_hash) WHERE password_reset_token_hash IS NOT NULL;
 CREATE INDEX idx_attendance_employee_date ON attendance(employee_id, date);
 CREATE INDEX idx_attendance_date ON attendance(date);
 CREATE INDEX idx_offset_credits_employee_status ON offset_credits(employee_id, status);
