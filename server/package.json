@@ -13,6 +13,13 @@
     "seed:demo-employee": "node scripts/run-sql-file.js src/db/seed-demo-employee-attendance.sql"
   },
   "dependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^4.17.25",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^20.19.41",
+    "@types/nodemailer": "^8.0.0",
+    "@types/pg": "^8.20.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "date-fns": "^3.6.0",
@@ -22,17 +29,10 @@
     "jsonwebtoken": "^9.0.2",
     "nodemailer": "^8.0.7",
     "pg": "^8.12.0",
+    "typescript": "^5.9.3",
     "winston": "^3.13.0"
   },
   "devDependencies": {
-    "@types/bcryptjs": "^2.4.6",
-    "@types/cors": "^2.8.17",
-    "@types/express": "^4.17.25",
-    "@types/jsonwebtoken": "^9.0.10",
-    "@types/node": "^20.19.41",
-    "@types/nodemailer": "^8.0.0",
-    "@types/pg": "^8.20.0",
-    "ts-node-dev": "^2.0.0",
-    "typescript": "^5.4.5"
+    "ts-node-dev": "^2.0.0"
   }
 }
