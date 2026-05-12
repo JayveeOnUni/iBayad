@@ -203,6 +203,12 @@ JWT_EXPIRES_IN=15m
 JWT_REFRESH_EXPIRES_IN=7d
 
 CLIENT_URL=http://localhost:5173
+
+REQUIRE_EMAIL_READY=false
+RESEND_API_KEY=your_resend_api_key_here
+EMAIL_FROM="iBayad Payroll <noreply@your-domain.com>"
+EMAIL_SEND_RETRIES=2
+EMAIL_RETRY_DELAY_MS=1000
 ```
 
 ### 5. Create the database
@@ -333,13 +339,13 @@ Recommended Render environment variables:
 ```env
 NODE_ENV=production
 NODE_VERSION=22
-REQUIRE_SMTP_READY=false
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_SECURE=false
+REQUIRE_EMAIL_READY=true
+RESEND_API_KEY=re_xxxxxxxxx
+EMAIL_FROM="iBayad Payroll <noreply@your-verified-domain.com>"
+CLIENT_URL=https://your-frontend-domain.com
 ```
 
-Also set the production database, JWT, CORS/client URL, and SMTP credential variables in Render. Keep `REQUIRE_SMTP_READY=false` unless deployment should fail when SMTP is unreachable; email routes will still return a clear error if SMTP cannot send.
+Also set the production database, JWT, and CORS variables in Render. `RESEND_API_KEY` must stay server-side only, and `EMAIL_FROM` should use a sender address on a Resend-verified domain. Keep `CLIENT_URL` pointed at the deployed frontend so employee activation and password reset links are generated correctly.
 
 ## Useful Scripts
 

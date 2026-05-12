@@ -15,11 +15,11 @@ import adminDashboardRoutes from './routes/adminDashboard'
 import { asyncHandler, errorHandler } from './middleware/errorHandler'
 import { authenticate, requireRole } from './middleware/auth'
 import {
-  getSafeSmtpConfigForLogging,
-  isSmtpReadinessRequired,
+  getSafeEmailConfigForLogging,
+  isEmailReadinessRequired,
   validateProductionConfig,
 } from './config/environment'
-import { assertSmtpReady, verifySmtpConnection } from './services/emailService'
+import { assertEmailProviderReady, verifyEmailProviderReadiness } from './services/emailService'
 import { logger } from './utils/logger'
 
 dotenv.config()
@@ -101,8 +101,8 @@ app.get('/api/health', (_req: Request, res: Response): void => {
   })
 })
 
-app.get('/api/admin/readiness/smtp', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
-  const readiness = await verifySmtpConnection()
+app.get('/api/admin/readiness/email', authenticate, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
+  const readiness = await verifyEmailProviderReadiness()
 
   res.status(readiness.ready ? 200 : 503).json({
     success: readiness.ready,
@@ -120,22 +120,22 @@ app.use((_req: Request, res: Response): void => {
 app.use(errorHandler)
 
 // ─── Start ────────────────────────────────────────────────────────────────────
-function shouldCheckSmtpOnStartup(requireSmtpReady: boolean): boolean {
-  return requireSmtpReady || process.env.NODE_ENV === 'production'
+function shouldCheckEmailOnStartup(requireEmailReady: boolean): boolean {
+  return requireEmailReady || process.env.NODE_ENV === 'production'
 }
 
-function logSmtpStartupConfig(requireSmtpReady: boolean): void {
-  logger.info('SMTP startup configuration', {
-    ...getSafeSmtpConfigForLogging(),
-    requireSmtpReady,
+function logEmailStartupConfig(requireEmailReady: boolean): void {
+  logger.info('Email provider startup configuration', {
+    ...getSafeEmailConfigForLogging(),
+    requireEmailReady,
   })
 }
 
-async function runOptionalSmtpReadinessCheck(): Promise<void> {
-  const readiness = await verifySmtpConnection()
+async function runOptionalEmailReadinessCheck(): Promise<void> {
+  const readiness = await verifyEmailProviderReadiness()
   if (!readiness.ready) {
-    logger.warn('SMTP readiness check failed; continuing because REQUIRE_SMTP_READY is not true', {
-      ...getSafeSmtpConfigForLogging(),
+    logger.warn('Email readiness check failed; continuing because REQUIRE_EMAIL_READY is not true', {
+      ...getSafeEmailConfigForLogging(),
       message: readiness.message,
     })
   }
@@ -143,14 +143,14 @@ async function runOptionalSmtpReadinessCheck(): Promise<void> {
 
 async function startServer(): Promise<void> {
   try {
-    const requireSmtpReady = isSmtpReadinessRequired()
+    const requireEmailReady = isEmailReadinessRequired()
 
-    if (shouldCheckSmtpOnStartup(requireSmtpReady)) {
-      logSmtpStartupConfig(requireSmtpReady)
+    if (shouldCheckEmailOnStartup(requireEmailReady)) {
+      logEmailStartupConfig(requireEmailReady)
     }
 
-    if (requireSmtpReady) {
-      await assertSmtpReady()
+    if (requireEmailReady) {
+      await assertEmailProviderReady()
     }
 
     app.listen(PORT, HOST, (): void => {
@@ -162,10 +162,10 @@ async function startServer(): Promise<void> {
       })
     })
 
-    if (!requireSmtpReady && shouldCheckSmtpOnStartup(requireSmtpReady)) {
-      void runOptionalSmtpReadinessCheck().catch((error) => {
-        logger.error('SMTP readiness check errored; server remains online because REQUIRE_SMTP_READY is not true', {
-          ...getSafeSmtpConfigForLogging(),
+    if (!requireEmailReady && shouldCheckEmailOnStartup(requireEmailReady)) {
+      void runOptionalEmailReadinessCheck().catch((error) => {
+        logger.error('Email readiness check errored; server remains online because REQUIRE_EMAIL_READY is not true', {
+          ...getSafeEmailConfigForLogging(),
           error,
         })
       })

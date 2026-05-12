@@ -1,5 +1,3 @@
-import { logger } from '../utils/logger'
-
 const LOCAL_HOSTNAMES = new Set([
   'localhost',
   '127.0.0.1',
@@ -9,17 +7,10 @@ const LOCAL_HOSTNAMES = new Set([
   'host.docker.internal',
 ])
 
-export interface SmtpEnvironmentConfig {
-  host: string
-  port: number
-  secure: boolean
-  user?: string
-  pass?: string
+export interface EmailEnvironmentConfig {
+  provider: 'resend'
+  apiKey: string
   from: string
-  requireTls: boolean
-  connectionTimeoutMs: number
-  greetingTimeoutMs: number
-  socketTimeoutMs: number
   sendRetries: number
   retryDelayMs: number
 }
@@ -29,7 +20,13 @@ function isProduction(): boolean {
 }
 
 function isPlaceholder(value: string | undefined): boolean {
-  return !value || value.trim() === '' || value.trim() === 'your_smtp_password_here'
+  if (!value || value.trim() === '') return true
+
+  const normalized = value.trim().toLowerCase()
+  return [
+    'your_resend_api_key_here',
+    're_xxxxxxxxx',
+  ].includes(normalized)
 }
 
 function parseBoolean(name: string, fallback?: boolean): boolean {
@@ -45,18 +42,6 @@ function parseBoolean(name: string, fallback?: boolean): boolean {
   throw new Error(`${name} must be set to true or false`)
 }
 
-function parsePort(name: string, fallback: number): number {
-  const rawValue = process.env[name]
-  const value = rawValue == null || rawValue.trim() === '' ? String(fallback) : rawValue.trim()
-  const port = Number(value)
-
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error(`${name} must be a numeric TCP port between 1 and 65535`)
-  }
-
-  return port
-}
-
 function parsePositiveInteger(name: string, fallback: number): number {
   const rawValue = process.env[name]
   const value = rawValue == null || rawValue.trim() === '' ? String(fallback) : rawValue.trim()
@@ -69,23 +54,27 @@ function parsePositiveInteger(name: string, fallback: number): number {
   return parsed
 }
 
-export function isSmtpReadinessRequired(): boolean {
-  return parseBoolean('REQUIRE_SMTP_READY', false)
+export function isEmailReadinessRequired(): boolean {
+  return parseBoolean('REQUIRE_EMAIL_READY', isProduction())
 }
 
-export function getSafeSmtpConfigForLogging(): {
-  SMTP_HOST?: string
-  SMTP_PORT: string
-  SMTP_SECURE: string
+export function getSafeEmailConfigForLogging(config?: Partial<EmailEnvironmentConfig>): {
+  EMAIL_PROVIDER: 'resend'
+  EMAIL_FROM?: string
+  EMAIL_SEND_RETRIES: number
 } {
-  const host = process.env.SMTP_HOST?.trim()
-  const port = process.env.SMTP_PORT?.trim()
-  const secure = process.env.SMTP_SECURE?.trim()
+  const from = config?.from ?? process.env.EMAIL_FROM?.trim()
+  const fallbackRetries = isProduction() ? 2 : 0
+  const rawRetries = process.env.EMAIL_SEND_RETRIES?.trim()
+  const parsedRetries = rawRetries ? Number(rawRetries) : fallbackRetries
+  const retries = config?.sendRetries ?? (
+    Number.isInteger(parsedRetries) && parsedRetries >= 0 ? parsedRetries : fallbackRetries
+  )
 
   return {
-    ...(host ? { SMTP_HOST: host } : {}),
-    SMTP_PORT: port || '587',
-    SMTP_SECURE: secure || 'false',
+    EMAIL_PROVIDER: 'resend',
+    ...(from ? { EMAIL_FROM: from } : {}),
+    EMAIL_SEND_RETRIES: retries,
   }
 }
 
@@ -147,74 +136,56 @@ export function buildClientUrl(pathname: string, params: Record<string, string> 
   return url.toString()
 }
 
-export function getSmtpEnvironmentConfig(): SmtpEnvironmentConfig {
-  const host = process.env.SMTP_HOST?.trim()
-  const port = parsePort('SMTP_PORT', 587)
-  const secure = parseBoolean('SMTP_SECURE', false)
-  const user = process.env.SMTP_USER?.trim()
-  const pass = process.env.SMTP_PASS
-  const from = process.env.SMTP_FROM?.trim() || user
-
-  if (!host) throw new Error('SMTP_HOST is required to send email')
-  if (!from) throw new Error('SMTP_FROM is required to send email')
-  if ((user && isPlaceholder(pass)) || (!user && !isPlaceholder(pass))) {
-    throw new Error('SMTP_USER and SMTP_PASS must be set together')
-  }
-
-  const requireTls = secure ? false : parseBoolean('SMTP_REQUIRE_TLS', isProduction())
-  const config: SmtpEnvironmentConfig = {
-    host,
-    port,
-    secure,
-    user,
-    pass: isPlaceholder(pass) ? undefined : pass,
-    from,
-    requireTls,
-    connectionTimeoutMs: parsePositiveInteger('SMTP_CONNECTION_TIMEOUT_MS', 10_000),
-    greetingTimeoutMs: parsePositiveInteger('SMTP_GREETING_TIMEOUT_MS', 10_000),
-    socketTimeoutMs: parsePositiveInteger('SMTP_SOCKET_TIMEOUT_MS', 30_000),
-    sendRetries: parsePositiveInteger('SMTP_SEND_RETRIES', isProduction() ? 2 : 0),
-    retryDelayMs: parsePositiveInteger('SMTP_RETRY_DELAY_MS', 1_000),
-  }
-
-  validateSmtpSecurityPairing(config, isProduction())
-  return config
+function emailAddressFromSender(value: string): string {
+  const trimmed = value.trim()
+  const displayNameMatch = trimmed.match(/<([^<>]+)>$/)
+  return displayNameMatch?.[1]?.trim() ?? trimmed
 }
 
-export function validateSmtpSecurityPairing(
-  config: Pick<SmtpEnvironmentConfig, 'secure' | 'port'>,
-  strict: boolean
-): void {
-  if (config.secure && config.port !== 465) {
-    const message = 'SMTP_SECURE=true should use port 465 for implicit TLS'
-    if (strict) throw new Error(message)
-    logger.warn(message, { smtpPort: config.port, smtpSecure: config.secure })
+function validateEmailFrom(value: string): void {
+  const address = emailAddressFromSender(value)
+  const normalized = address.toLowerCase()
+  const placeholderDomains = ['example.com', 'your-domain.com']
+
+  if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(address)) {
+    throw new Error('EMAIL_FROM must be a valid sender email, optionally formatted as "Name <sender@domain.com>"')
   }
 
-  if (!config.secure && config.port === 465) {
-    throw new Error('SMTP_SECURE=false cannot use port 465; use SMTP_SECURE=true for implicit TLS or use port 587 for STARTTLS')
+  if (placeholderDomains.some((domain) => normalized.endsWith(`@${domain}`))) {
+    throw new Error('EMAIL_FROM must use a verified Resend sender domain, not a placeholder domain')
   }
+}
 
-  if (!config.secure && config.port !== 587) {
-    logger.warn('SMTP_SECURE=false is usually paired with port 587 or another STARTTLS-compatible port', {
-      smtpPort: config.port,
-      smtpSecure: config.secure,
-    })
+export function getEmailEnvironmentConfig(): EmailEnvironmentConfig {
+  const apiKey = process.env.RESEND_API_KEY?.trim()
+  const from = process.env.EMAIL_FROM?.trim()
+
+  if (isPlaceholder(apiKey)) throw new Error('RESEND_API_KEY is required to send email')
+  if (!from) throw new Error('EMAIL_FROM is required to send email')
+
+  validateEmailFrom(from)
+
+  return {
+    provider: 'resend',
+    apiKey: apiKey!,
+    from,
+    sendRetries: parsePositiveInteger('EMAIL_SEND_RETRIES', isProduction() ? 2 : 0),
+    retryDelayMs: parsePositiveInteger('EMAIL_RETRY_DELAY_MS', 1_000),
   }
 }
 
 export function validateProductionConfig(): void {
   if (!isProduction()) return
 
-  const requireSmtpReady = isSmtpReadinessRequired()
+  const requireEmailReady = isEmailReadinessRequired()
   const required = [
     'JWT_SECRET',
     'JWT_REFRESH_SECRET',
     'CLIENT_URL',
   ]
 
-  if (requireSmtpReady) {
-    required.push('SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURE')
+  if (requireEmailReady) {
+    required.push('RESEND_API_KEY', 'EMAIL_FROM')
   }
 
   if (!process.env.DATABASE_URL) {
@@ -239,7 +210,7 @@ export function validateProductionConfig(): void {
   }
 
   validateClientUrl(process.env.CLIENT_URL!)
-  if (requireSmtpReady) {
-    getSmtpEnvironmentConfig()
+  if (requireEmailReady) {
+    getEmailEnvironmentConfig()
   }
 }

@@ -1,9 +1,9 @@
-import nodemailer, { type SendMailOptions, type Transporter } from 'nodemailer'
-import type SMTPTransport from 'nodemailer/lib/smtp-transport'
+import { randomUUID } from 'crypto'
+import { Resend, type ErrorResponse } from 'resend'
 import {
-  getSafeSmtpConfigForLogging,
-  getSmtpEnvironmentConfig,
-  type SmtpEnvironmentConfig,
+  getEmailEnvironmentConfig,
+  getSafeEmailConfigForLogging,
+  type EmailEnvironmentConfig,
 } from '../config/environment'
 import { logger } from '../utils/logger'
 
@@ -40,12 +40,11 @@ export interface EmailDeliveryMetadata {
   sentAt: string
 }
 
-export interface SmtpReadinessResult {
+export interface EmailReadinessResult {
   ready: boolean
   checkedAt: string
-  host?: string
-  port?: number
-  secure?: boolean
+  provider: 'resend'
+  from?: string
   message: string
 }
 
@@ -54,15 +53,15 @@ export class EmailDeliveryError extends Error {
   cause?: unknown
 
   constructor(emailType: EmailType, cause?: unknown) {
-    super(`Email delivery failed for ${emailType}. SMTP service is unavailable or rejected the message.`)
+    super(`Email delivery failed for ${emailType}. The email provider is unavailable or rejected the message.`)
     this.name = 'EmailDeliveryError'
     this.emailType = emailType
     this.cause = cause
   }
 }
 
-let transporter: Transporter<SMTPTransport.SentMessageInfo, SMTPTransport.Options> | null = null
-let transporterConfig: SmtpEnvironmentConfig | null = null
+let resendClient: Resend | null = null
+let resendConfig: EmailEnvironmentConfig | null = null
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -80,202 +79,162 @@ function escapeHtml(value: string): string {
   }[char] ?? char))
 }
 
-function stringifyAddress(value: unknown): string {
-  if (typeof value === 'string') return value
-  if (typeof value === 'object' && value !== null && 'address' in value) {
-    const address = (value as { address?: unknown }).address
-    return typeof address === 'string' ? address : ''
-  }
-  return ''
+function normalizeAsciiIdentifier(value: string, fallback: string): string {
+  const normalized = value.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64)
+  return normalized || fallback
 }
 
-function toStringArray(values: unknown): string[] {
-  return Array.isArray(values)
-    ? values.map(stringifyAddress).filter(Boolean)
-    : []
+function toRecipientArray(to: SendEmailInput['to']): string[] {
+  return Array.isArray(to) ? to : [to]
 }
 
 function recipientDomains(to: SendEmailInput['to']): string[] {
-  const recipients = Array.isArray(to) ? to : [to]
+  const recipients = toRecipientArray(to)
   return [...new Set(recipients.map((recipient) => recipient.split('@')[1]).filter(Boolean))]
 }
 
-function buildTransportOptions(config: SmtpEnvironmentConfig): SMTPTransport.Options {
-  return {
-    host: config.host,
-    port: config.port,
-    secure: config.secure,
-    requireTLS: config.requireTls,
-    connectionTimeout: config.connectionTimeoutMs,
-    greetingTimeout: config.greetingTimeoutMs,
-    socketTimeout: config.socketTimeoutMs,
-    auth: config.user && config.pass
-      ? {
-          user: config.user,
-          pass: config.pass,
-        }
-      : undefined,
-    tls: {
-      minVersion: 'TLSv1.2',
-    },
-  }
-}
+function createResendClient(): Resend {
+  const config = getEmailEnvironmentConfig()
 
-export function createTransporter(): Transporter<SMTPTransport.SentMessageInfo, SMTPTransport.Options> {
-  const config = getSmtpEnvironmentConfig()
-
-  if (!transporter) {
-    transporter = nodemailer.createTransport(buildTransportOptions(config))
-    transporterConfig = config
+  if (!resendClient || resendConfig?.apiKey !== config.apiKey) {
+    resendClient = new Resend(config.apiKey)
+    resendConfig = config
   }
 
-  return transporter
+  return resendClient
 }
 
-function getActiveConfig(): SmtpEnvironmentConfig {
-  if (!transporterConfig) {
-    createTransporter()
+function getActiveConfig(): EmailEnvironmentConfig {
+  if (!resendConfig) {
+    createResendClient()
   }
 
-  return transporterConfig!
+  return resendConfig!
 }
 
-function getSmtpErrorMetadata(error: unknown): Record<string, unknown> {
+function getResendErrorMetadata(error: unknown): Record<string, unknown> {
   if (typeof error !== 'object' || error === null) return { error }
 
-  const smtpError = error as Error & {
-    code?: unknown
-    command?: unknown
-    responseCode?: unknown
-  }
+  const resendError = error as Partial<ErrorResponse> & Error
 
   return {
-    errorName: smtpError.name,
-    ...(process.env.NODE_ENV !== 'production' ? { errorMessage: smtpError.message } : {}),
-    code: smtpError.code,
-    command: smtpError.command,
-    responseCode: smtpError.responseCode,
+    errorName: resendError.name,
+    statusCode: resendError.statusCode,
+    ...(process.env.NODE_ENV !== 'production' ? { errorMessage: resendError.message } : {}),
   }
 }
 
-function smtpLogConfig(config: SmtpEnvironmentConfig | undefined): Record<string, unknown> {
-  return config
-    ? {
-        SMTP_HOST: config.host,
-        SMTP_PORT: config.port,
-        SMTP_SECURE: config.secure,
-      }
-    : getSafeSmtpConfigForLogging()
+function isRetryableResendError(error: ErrorResponse): boolean {
+  if (error.statusCode == null) return true
+  if (error.statusCode === 408 || error.statusCode === 429) return true
+  return error.statusCode >= 500
 }
 
-function isRetryableSmtpError(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null) return false
-
-  const smtpError = error as { code?: unknown; responseCode?: unknown }
-  if (typeof smtpError.responseCode === 'number' && smtpError.responseCode >= 500) return false
-
-  return ['ETIMEDOUT', 'ECONNECTION', 'ECONNRESET', 'ESOCKET'].includes(String(smtpError.code))
-}
-
-function toDeliveryMetadata(
-  emailType: EmailType,
-  info: SMTPTransport.SentMessageInfo
-): EmailDeliveryMetadata {
+function toDeliveryMetadata(emailType: EmailType, messageId: string | undefined, recipients: string[]): EmailDeliveryMetadata {
   return {
     emailType,
-    messageId: info.messageId,
-    accepted: toStringArray(info.accepted),
-    rejected: toStringArray(info.rejected),
-    pending: toStringArray(info.pending),
+    messageId,
+    accepted: recipients,
+    rejected: [],
+    pending: [],
     sentAt: new Date().toISOString(),
   }
 }
 
-export async function verifySmtpConnection(): Promise<SmtpReadinessResult> {
-  let config: SmtpEnvironmentConfig | undefined
+function createIdempotencyKey(emailType: EmailType): string {
+  return [
+    'ibayad',
+    normalizeAsciiIdentifier(emailType, 'email'),
+    randomUUID(),
+  ].join('-')
+}
 
+export async function verifyEmailProviderReadiness(): Promise<EmailReadinessResult> {
   try {
-    const mailer = createTransporter()
-    config = getActiveConfig()
-    await mailer.verify()
+    const client = createResendClient()
+    const config = getActiveConfig()
 
-    logger.info('SMTP readiness check succeeded', {
-      ...smtpLogConfig(config),
+    if (!client) {
+      throw new Error('Resend client could not be initialized')
+    }
+
+    logger.info('Email provider readiness check succeeded', {
+      ...getSafeEmailConfigForLogging(config),
     })
 
     return {
       ready: true,
       checkedAt: new Date().toISOString(),
-      host: config.host,
-      port: config.port,
-      secure: config.secure,
-      message: 'SMTP connection verified',
+      provider: 'resend',
+      from: config.from,
+      message: 'Resend email configuration is present',
     }
   } catch (error) {
-    logger.error('SMTP readiness check failed', {
-      ...smtpLogConfig(config),
-      ...getSmtpErrorMetadata(error),
+    logger.error('Email provider readiness check failed', {
+      ...getSafeEmailConfigForLogging(),
+      ...getResendErrorMetadata(error),
     })
 
     return {
       ready: false,
       checkedAt: new Date().toISOString(),
-      host: config?.host,
-      port: config?.port,
-      secure: config?.secure,
-      message: 'SMTP connection could not be verified',
+      provider: 'resend',
+      message: 'Resend email configuration is incomplete or invalid',
     }
   }
 }
 
-export async function assertSmtpReady(): Promise<void> {
-  const readiness = await verifySmtpConnection()
+export async function assertEmailProviderReady(): Promise<void> {
+  const readiness = await verifyEmailProviderReadiness()
   if (!readiness.ready) {
-    throw new Error('SMTP readiness check failed. Verify SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP credentials, and SMTP_FROM.')
+    throw new Error('Email readiness check failed. Verify RESEND_API_KEY, EMAIL_FROM, and CLIENT_URL.')
   }
 }
 
 export async function sendEmail(input: SendEmailInput): Promise<EmailDeliveryMetadata> {
-  let mailer: Transporter<SMTPTransport.SentMessageInfo, SMTPTransport.Options>
-  let config: SmtpEnvironmentConfig
+  let client: Resend
+  let config: EmailEnvironmentConfig
 
   try {
-    mailer = createTransporter()
+    client = createResendClient()
     config = getActiveConfig()
   } catch (error) {
-    logger.warn('Email send failed before SMTP transport was ready', {
+    logger.warn('Email send failed before Resend client was ready', {
       emailType: input.emailType,
       recipientDomains: recipientDomains(input.to),
-      ...smtpLogConfig(undefined),
-      ...getSmtpErrorMetadata(error),
+      ...getSafeEmailConfigForLogging(),
+      ...getResendErrorMetadata(error),
     })
     throw new EmailDeliveryError(input.emailType, error)
   }
 
+  const recipients = toRecipientArray(input.to)
   const attempts = config.sendRetries + 1
-  const mailOptions: SendMailOptions = {
-    from: config.from,
-    to: input.to,
-    subject: input.subject,
-    text: input.text,
-    html: input.html,
-    headers: {
-      'X-iBayad-Email-Type': input.emailType,
-    },
-    disableFileAccess: true,
-    disableUrlAccess: true,
-  }
+  const idempotencyKey = createIdempotencyKey(input.emailType)
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      const info = await mailer.sendMail(mailOptions)
-      const metadata = toDeliveryMetadata(input.emailType, info)
+    const response = await client.emails.send({
+      from: config.from,
+      to: recipients,
+      subject: input.subject,
+      text: input.text,
+      html: input.html,
+      headers: {
+        'X-iBayad-Email-Type': input.emailType,
+      },
+      tags: [
+        {
+          name: 'email_type',
+          value: normalizeAsciiIdentifier(input.emailType, 'email'),
+        },
+      ],
+    }, { idempotencyKey })
 
-      if (metadata.rejected.length > 0 && metadata.accepted.length === 0) {
-        throw new Error('SMTP provider rejected all recipients')
-      }
+    if (response.data) {
+      const metadata = toDeliveryMetadata(input.emailType, response.data.id, recipients)
 
       logger.info('Email sent', {
+        provider: config.provider,
         emailType: input.emailType,
         messageId: metadata.messageId,
         acceptedCount: metadata.accepted.length,
@@ -285,23 +244,24 @@ export async function sendEmail(input: SendEmailInput): Promise<EmailDeliveryMet
       })
 
       return metadata
-    } catch (error) {
-      const canRetry = attempt < attempts && isRetryableSmtpError(error)
-
-      logger.warn(canRetry ? 'Email send attempt failed; retrying' : 'Email send failed', {
-        emailType: input.emailType,
-        attempt,
-        attempts,
-        recipientDomains: recipientDomains(input.to),
-        ...getSmtpErrorMetadata(error),
-      })
-
-      if (!canRetry) {
-        throw new EmailDeliveryError(input.emailType, error)
-      }
-
-      await sleep(config.retryDelayMs * attempt)
     }
+
+    const canRetry = attempt < attempts && isRetryableResendError(response.error)
+
+    logger.warn(canRetry ? 'Email send attempt failed; retrying' : 'Email send failed', {
+      provider: config.provider,
+      emailType: input.emailType,
+      attempt,
+      attempts,
+      recipientDomains: recipientDomains(input.to),
+      ...getResendErrorMetadata(response.error),
+    })
+
+    if (!canRetry) {
+      throw new EmailDeliveryError(input.emailType, response.error)
+    }
+
+    await sleep(config.retryDelayMs * attempt)
   }
 
   throw new EmailDeliveryError(input.emailType)

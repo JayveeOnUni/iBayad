@@ -1,7 +1,7 @@
 type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 type LogMeta = Record<string, unknown>
 
-const SENSITIVE_KEY_PATTERN = /(pass|password|token|secret|authorization|cookie|credential|smtp_pass|jwt)/i
+const SENSITIVE_KEY_PATTERN = /(pass|password|token|secret|authorization|cookie|credential|api[_-]?key|jwt)/i
 const TOKEN_QUERY_PATTERN = /([?&](?:token|password|pass|secret|jwt|code)=)[^&\s]+/gi
 
 function redactString(value: string): string {

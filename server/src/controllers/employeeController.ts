@@ -71,7 +71,7 @@ async function sendEmployeeActivationLink(employee: Pick<EmployeeRow, 'first_nam
       error,
     })
     throw createError(
-      'Activation email could not be sent. Check SMTP settings, then try again.',
+      'Activation email could not be sent. Check email provider settings, then try again.',
       502
     )
   }
