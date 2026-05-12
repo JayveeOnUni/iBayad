@@ -46,6 +46,11 @@ interface AttendanceRowForMetrics {
   status?: string | null
 }
 
+interface OffsetCreditAllocationRow extends Record<string, unknown> {
+  id: string
+  minutes_remaining: number | string
+}
+
 function normalizeDate(value: Date | string): Date {
   if (value instanceof Date) return new Date(value)
   const [year, month, day] = value.slice(0, 10).split('-').map(Number)
@@ -481,7 +486,7 @@ async function allocateOffsetMinutes(
   usageId: string,
   minutes: number
 ): Promise<void> {
-  const credits = await client.query(
+  const credits = await client.query<OffsetCreditAllocationRow>(
     `SELECT id, minutes_remaining
      FROM offset_credits
      WHERE employee_id = $1
@@ -492,7 +497,7 @@ async function allocateOffsetMinutes(
     [employeeId]
   )
 
-  const available = credits.rows.reduce((sum, row) => sum + Number(row.minutes_remaining), 0)
+  const available = credits.rows.reduce((sum: number, row: OffsetCreditAllocationRow): number => sum + Number(row.minutes_remaining), 0)
   if (available < minutes) {
     throw createError('Insufficient approved offset credits', 400)
   }

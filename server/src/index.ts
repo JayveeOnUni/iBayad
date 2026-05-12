@@ -1,4 +1,4 @@
-import express from 'express'
+import express, { type NextFunction, type Request, type Response } from 'express'
 import cors from 'cors'
 import dotenv from 'dotenv'
 
@@ -69,7 +69,7 @@ const allowedOrigins = getAllowedOrigins()
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
 app.use(cors({
-  origin(origin, callback) {
+  origin(origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void): void {
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true)
       return
@@ -83,7 +83,7 @@ app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true }))
 
 // Request logger (simple, replace with winston in production)
-app.use((req, _res, next) => {
+app.use((req: Request, _res: Response, next: NextFunction): void => {
   const ts = new Date().toISOString()
   console.log(`[${ts}] ${req.method} ${req.path}`)
   next()
@@ -101,7 +101,7 @@ app.use('/api/admin/dashboard', adminDashboardRoutes)
 app.use('/api/admin/leaves', adminLeaveRoutes)
 
 // Health check
-app.get('/api/health', (_req, res) => {
+app.get('/api/health', (_req: Request, res: Response): void => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
@@ -110,7 +110,7 @@ app.get('/api/health', (_req, res) => {
 })
 
 // 404 handler
-app.use((_req, res) => {
+app.use((_req: Request, res: Response): void => {
   res.status(404).json({ success: false, message: 'Route not found' })
 })
 
@@ -118,7 +118,7 @@ app.use((_req, res) => {
 app.use(errorHandler)
 
 // ─── Start ────────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
+app.listen(PORT, (): void => {
   console.log(`\n iBayad Payroll API`)
   console.log(` Listening on port: ${PORT}`)
   console.log(` Environment: ${process.env.NODE_ENV || 'development'}`)

@@ -14,6 +14,79 @@ function round(value: number, decimals = 2): number {
   return Math.round(value * factor) / factor
 }
 
+interface EmployeeDashboardRow extends Record<string, unknown> {
+  id: string
+  employee_number: string
+  first_name: string
+  last_name: string
+  email: string
+  department_name: string | null
+  position_title: string | null
+  work_days_per_month: number | string
+  shift_start: string
+  shift_end: string
+  scheduled_hours: number | string
+}
+
+interface AttendanceTodayRow extends Record<string, unknown> {
+  id: string
+  time_in: Date | string | null
+  time_out: Date | string | null
+  status: string | null
+  late_minutes: number | string | null
+  offset_earned_minutes: number | string | null
+  offset_used_minutes: number | string | null
+  excess_minutes: number | string | null
+  overtime_hours: number | string | null
+  total_worked_minutes: number | string | null
+}
+
+interface MonthlyAttendanceRow extends Record<string, unknown> {
+  present_days: number | string
+  absent_days: number | string
+  late_days: number | string
+  half_days: number | string
+  leave_days: number | string
+  late_minutes: number | string
+  offset_earned_minutes: number | string
+  offset_used_minutes: number | string
+  undertime_minutes: number | string
+  overtime_hours: number | string
+  worked_minutes: number | string
+}
+
+interface LeaveBalanceRow extends Record<string, unknown> {
+  id: string
+  name: string
+  code: string
+  is_paid: boolean
+  allowance: number | string
+  taken: number | string
+  pending: number | string
+  balance: number | string
+}
+
+interface LeaveBalanceItem {
+  id: string
+  name: string
+  code: string
+  isPaid: boolean
+  allowance: number
+  taken: number
+  pending: number
+  balance: number
+}
+
+interface AnnouncementRow extends Record<string, unknown> {
+  id: string
+  title: string
+  message: string
+  start_date: Date | string | null
+  end_date: Date | string | null
+  is_pinned: boolean
+  created_at: Date | string
+}
+
 export const getEmployeeDashboard = asyncHandler(async (req: Request, res: Response) => {
   const employeeId = req.user!.employeeId
   if (!employeeId) throw createError('No employee profile is linked to this account', 403)
@@ -23,7 +96,7 @@ export const getEmployeeDashboard = asyncHandler(async (req: Request, res: Respo
   const year = now.getFullYear()
   const month = now.getMonth() + 1
 
-  const employeeResult = await pool.query(
+  const employeeResult = await pool.query<EmployeeDashboardRow>(
     `SELECT e.id, e.employee_number, e.first_name, e.last_name, e.email,
             d.name AS department_name,
             p.title AS position_title,
@@ -43,7 +116,7 @@ export const getEmployeeDashboard = asyncHandler(async (req: Request, res: Respo
   if (!employee) throw createError('Employee profile not found', 404)
 
   const [todayResult, monthlyResult, leaveResult, announcementsResult] = await Promise.all([
-    pool.query(
+    pool.query<AttendanceTodayRow>(
       `SELECT id, date, time_in, time_out, status, late_minutes,
               offset_earned_minutes, offset_used_minutes, excess_minutes,
               overtime_hours, total_worked_minutes, created_at, updated_at
@@ -51,7 +124,7 @@ export const getEmployeeDashboard = asyncHandler(async (req: Request, res: Respo
        WHERE employee_id = $1 AND date = $2`,
       [employeeId, today]
     ),
-    pool.query(
+    pool.query<MonthlyAttendanceRow>(
       `SELECT
          COUNT(*) FILTER (WHERE status IN ('present', 'late')) AS present_days,
          COUNT(*) FILTER (WHERE status = 'absent') AS absent_days,
@@ -70,7 +143,7 @@ export const getEmployeeDashboard = asyncHandler(async (req: Request, res: Respo
          AND EXTRACT(MONTH FROM date) = $3`,
       [employeeId, year, month]
     ),
-    pool.query(
+    pool.query<LeaveBalanceRow>(
       `SELECT lt.id, lt.name, lt.code, lt.is_paid, lt.days_per_year AS allowance,
               COALESCE(SUM(CASE WHEN lr.status = 'approved' THEN lr.total_days ELSE 0 END), 0) AS taken,
               COALESCE(SUM(CASE WHEN lr.status = 'pending' THEN lr.total_days ELSE 0 END), 0) AS pending,
@@ -84,7 +157,7 @@ export const getEmployeeDashboard = asyncHandler(async (req: Request, res: Respo
        ORDER BY lt.name`,
       [employeeId, year]
     ),
-    pool.query(
+    pool.query<AnnouncementRow>(
       `SELECT id, title, content AS message, start_date, end_date, is_pinned, created_at
        FROM announcements
        WHERE (start_date IS NULL OR start_date <= $1)
@@ -105,7 +178,7 @@ export const getEmployeeDashboard = asyncHandler(async (req: Request, res: Respo
   const offsetUsedHours = Number(monthly.offset_used_minutes ?? 0) / 60
   const effectiveHours = totalHours + offsetUsedHours
   const expectedHours = Number(employee.scheduled_hours ?? 8) * Number(employee.work_days_per_month ?? 22)
-  const leaveItems = leaveResult.rows.map((row) => ({
+  const leaveItems: LeaveBalanceItem[] = leaveResult.rows.map((row: LeaveBalanceRow): LeaveBalanceItem => ({
     id: row.id,
     name: row.name,
     code: row.code,
@@ -169,13 +242,13 @@ export const getEmployeeDashboard = asyncHandler(async (req: Request, res: Respo
         vacationLeave,
         sickLeave,
         emergencyLeave,
-        totalAllowance: round(leaveItems.reduce((sum, item) => sum + item.allowance, 0), 1),
-        totalTaken: round(leaveItems.reduce((sum, item) => sum + item.taken, 0), 1),
-        totalAvailable: round(leaveItems.reduce((sum, item) => sum + item.balance, 0), 1),
-        pendingRequests: round(leaveItems.reduce((sum, item) => sum + item.pending, 0), 1),
+        totalAllowance: round(leaveItems.reduce((sum: number, item: LeaveBalanceItem): number => sum + item.allowance, 0), 1),
+        totalTaken: round(leaveItems.reduce((sum: number, item: LeaveBalanceItem): number => sum + item.taken, 0), 1),
+        totalAvailable: round(leaveItems.reduce((sum: number, item: LeaveBalanceItem): number => sum + item.balance, 0), 1),
+        pendingRequests: round(leaveItems.reduce((sum: number, item: LeaveBalanceItem): number => sum + item.pending, 0), 1),
         items: leaveItems,
       },
-      announcements: announcementsResult.rows.map((row) => ({
+      announcements: announcementsResult.rows.map((row: AnnouncementRow) => ({
         id: row.id,
         title: row.title,
         message: row.message,

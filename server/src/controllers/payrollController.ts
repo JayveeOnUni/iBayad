@@ -45,6 +45,11 @@ interface EnrichedPeriodRow extends Record<string, unknown> {
   pending_leave_request_count: number
 }
 
+interface PeriodFilters {
+  where: string
+  values: unknown[]
+}
+
 function toNumber(value: unknown): number {
   const numberValue = Number(value ?? 0)
   return Number.isFinite(numberValue) ? numberValue : 0
@@ -172,7 +177,7 @@ function countListWarnings(row: ReturnType<typeof enrichPeriodRow>): number {
   return count
 }
 
-function buildPeriodFilters(req: Request) {
+function buildPeriodFilters(req: Request): PeriodFilters {
   const conditions: string[] = []
   const values: unknown[] = []
   let i = 1
@@ -518,7 +523,7 @@ export const getPayrollPeriods = asyncHandler(async (req: Request, res: Response
     ),
   ])
 
-  const data = dataResult.rows.map((row) => {
+  const data = dataResult.rows.map((row: Record<string, unknown>) => {
     const enriched = enrichPeriodRow(row)
     return { ...enriched, warning_count: countListWarnings(enriched) }
   })

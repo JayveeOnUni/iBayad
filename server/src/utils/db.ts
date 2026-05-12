@@ -38,7 +38,7 @@ const pool = new Pool({
   connectionTimeoutMillis: 2_000,
 })
 
-pool.on('error', (err) => {
+pool.on('error', (err: Error) => {
   console.error('Unexpected DB pool error:', err)
 })
 
