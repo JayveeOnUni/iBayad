@@ -25,7 +25,7 @@ import Select from '../../../components/ui/Select'
 import { EmptyState, FeedbackMessage, PageHeader } from '../../../components/ui/Page'
 import { formatDate, formatDateTime } from '../../../utils/dateHelpers'
 import { formatPeso } from '../../../utils/taxComputation'
-import type { PayFrequency, PayrollAuditEntry, PayrollPeriod, PayrollRecord, PayrollStatus } from '../../../types'
+import type { PayFrequency, PayrollAuditEntry, PayrollIssueSummary, PayrollPeriod, PayrollRecord, PayrollStatus } from '../../../types'
 import { payrollService } from '../../../services/payrollService'
 
 type PageMessage = {
@@ -65,6 +65,12 @@ const actionPhrase: Record<PayrollAction, string> = {
 }
 
 const today = () => new Date().toISOString().slice(0, 10)
+
+const defaultPayrollIssueSummary: PayrollIssueSummary = {
+  criticalIssueCount: 0,
+  warningIssueCount: 0,
+  totalIssueCount: 0,
+}
 
 function defaultForm(): PeriodForm {
   const currentDate = today()
@@ -146,6 +152,20 @@ function auditDetail(entry: PayrollAuditEntry) {
 function employeeName(record: PayrollRecord) {
   if (!record.employee) return 'Employee'
   return `${record.employee.firstName} ${record.employee.lastName}`.trim()
+}
+
+function getPayrollIssueSummary(period?: PayrollPeriod | null): PayrollIssueSummary {
+  if (!period) return defaultPayrollIssueSummary
+
+  const issueSummary = period.issueSummary ?? defaultPayrollIssueSummary
+  const warningIssueCount = issueSummary.warningIssueCount ?? period.warningCount ?? period.warnings?.length ?? 0
+  const criticalIssueCount = issueSummary.criticalIssueCount ?? 0
+
+  return {
+    criticalIssueCount,
+    warningIssueCount,
+    totalIssueCount: issueSummary.totalIssueCount ?? criticalIssueCount + warningIssueCount,
+  }
 }
 
 export default function PayrollPage() {
@@ -249,7 +269,10 @@ export default function PayrollPage() {
   }, [periods])
 
   const focusPeriod = selectedPeriod ?? periods[0]
+  const focusIssueSummary = getPayrollIssueSummary(focusPeriod)
+  const selectedIssueSummary = getPayrollIssueSummary(selectedPeriod)
   const warnings = selectedPeriod?.warnings ?? []
+  const isLoadingValidationDetails = Boolean(selectedPeriod && isDetailLoading && !selectedPeriod.warnings)
   const actionKey = confirmAction ? `${confirmAction.action}:${confirmAction.period.id}` : null
   const canConfirmAction = Boolean(confirmAction && confirmAction.confirmation.trim() === actionPhrase[confirmAction.action])
 
@@ -469,11 +492,17 @@ export default function PayrollPage() {
           tone="warning"
         />
         <StatCard
-          label="Warnings"
-          value={focusPeriod?.warningCount ?? 0}
-          delta={(focusPeriod?.warningCount ?? 0) > 0 ? 'Review before approval or release' : 'No blocking warnings reported'}
+          label="Validation issues"
+          value={focusIssueSummary.totalIssueCount}
+          delta={
+            focusIssueSummary.criticalIssueCount > 0
+              ? `${focusIssueSummary.criticalIssueCount} critical issue${focusIssueSummary.criticalIssueCount === 1 ? '' : 's'} require review`
+              : focusIssueSummary.warningIssueCount > 0
+                ? `${focusIssueSummary.warningIssueCount} warning issue${focusIssueSummary.warningIssueCount === 1 ? '' : 's'} reported`
+                : 'No blocking warnings reported'
+          }
           icon={<AlertTriangle size={20} />}
-          tone={(focusPeriod?.warningCount ?? 0) > 0 ? 'danger' : 'neutral'}
+          tone={focusIssueSummary.totalIssueCount > 0 ? 'danger' : 'neutral'}
         />
       </div>
 
@@ -561,13 +590,24 @@ export default function PayrollPage() {
               render: (row) => <span className="text-sm font-semibold">{formatPeso(row.totalNetPay ?? 0)}</span>,
             },
             {
-              key: 'warnings',
-              header: 'Warnings',
-              render: (row) => (
-                <Badge variant={(row.warningCount ?? 0) > 0 ? 'warning' : 'neutral'}>
-                  {row.warningCount ?? 0}
-                </Badge>
-              ),
+              key: 'issues',
+              header: 'Issues',
+              render: (row) => {
+                const issueSummary = getPayrollIssueSummary(row)
+                return (
+                  <Badge
+                    variant={
+                      issueSummary.criticalIssueCount > 0
+                        ? 'danger'
+                        : issueSummary.totalIssueCount > 0
+                          ? 'warning'
+                          : 'neutral'
+                    }
+                  >
+                    {issueSummary.totalIssueCount}
+                  </Badge>
+                )
+              },
             },
             {
               key: 'payDate',
@@ -635,13 +675,29 @@ export default function PayrollPage() {
               </div>
 
               <div className="mt-5 border-t border-border pt-5">
-                <div className="mb-3 flex items-center gap-2">
-                  <AlertTriangle size={16} className="text-warning" />
-                  <p className="text-sm font-semibold text-ink">Warnings</p>
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle size={16} className="text-warning" />
+                    <p className="text-sm font-semibold text-ink">Validation summary</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Badge variant={selectedIssueSummary.criticalIssueCount > 0 ? 'danger' : 'neutral'}>
+                      Critical: {selectedIssueSummary.criticalIssueCount}
+                    </Badge>
+                    <Badge variant={selectedIssueSummary.warningIssueCount > 0 ? 'warning' : 'neutral'}>
+                      Warnings: {selectedIssueSummary.warningIssueCount}
+                    </Badge>
+                  </div>
                 </div>
-                {warnings.length === 0 ? (
+                {isLoadingValidationDetails ? (
                   <p className="rounded-md border border-border bg-neutral-20 px-3 py-2 text-sm text-muted">
-                    No warnings reported for this payroll period.
+                    Loading payroll validation details...
+                  </p>
+                ) : warnings.length === 0 ? (
+                  <p className="rounded-md border border-border bg-neutral-20 px-3 py-2 text-sm text-muted">
+                    {selectedIssueSummary.totalIssueCount > 0
+                      ? `Validation summary reports ${selectedIssueSummary.totalIssueCount} issue${selectedIssueSummary.totalIssueCount === 1 ? '' : 's'}, but no detailed messages were returned for this payroll period.`
+                      : 'No warnings reported for this payroll period.'}
                   </p>
                 ) : (
                   <div className="divide-y divide-border rounded-md border border-border">
