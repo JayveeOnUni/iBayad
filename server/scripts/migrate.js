@@ -35,6 +35,10 @@ const migrations = [
     name: '007_employee_government_id_fields',
     file: 'src/db/add-employee-government-id-fields.sql',
   },
+  {
+    name: '008_activation_email_tracking_fields',
+    file: 'src/db/add-activation-email-tracking-fields.sql',
+  },
 ]
 
 function resolveSqlFile(relativeFile) {
@@ -69,9 +73,34 @@ async function isApplied(client, name) {
   return result.rowCount > 0
 }
 
+async function markApplied(client, name) {
+  await client.query(
+    'INSERT INTO schema_migrations (name) VALUES ($1) ON CONFLICT (name) DO NOTHING',
+    [name]
+  )
+}
+
+async function baseSchemaExists(client) {
+  const result = await client.query(`
+    SELECT EXISTS (
+      SELECT 1
+      FROM information_schema.tables
+      WHERE table_schema = 'public'
+        AND table_name = 'users'
+    ) AS exists
+  `)
+  return Boolean(result.rows[0]?.exists)
+}
+
 async function applyMigration(client, migration) {
   if (await isApplied(client, migration.name)) {
     console.log(`Skipping ${migration.name}`)
+    return
+  }
+
+  if (migration.name === '001_schema' && await baseSchemaExists(client)) {
+    console.log('Baselining 001_schema because an existing users table was found')
+    await markApplied(client, migration.name)
     return
   }
 
@@ -82,10 +111,7 @@ async function applyMigration(client, migration) {
   await client.query('BEGIN')
   try {
     await client.query(sql)
-    await client.query(
-      'INSERT INTO schema_migrations (name) VALUES ($1)',
-      [migration.name]
-    )
+    await markApplied(client, migration.name)
     await client.query('COMMIT')
     console.log(`Applied ${migration.name}`)
   } catch (error) {

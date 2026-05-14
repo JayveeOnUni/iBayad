@@ -4,6 +4,24 @@ import { logger } from '../utils/logger'
 export interface AppError extends Error {
   statusCode?: number
   isOperational?: boolean
+  code?: string
+  constraint?: string
+}
+
+function toOperationalDatabaseError(err: AppError): AppError {
+  if (err.code === '42703') {
+    return createError('Database schema is out of date. Please run the latest migrations and try again.', 500)
+  }
+
+  if (err.code === '23505') {
+    const constraint = err.constraint ?? ''
+    if (constraint.includes('email')) {
+      return createError('An account or employee with that email already exists.', 409)
+    }
+    return createError('A record with that unique value already exists.', 409)
+  }
+
+  return err
 }
 
 /**
@@ -16,12 +34,13 @@ export function errorHandler(
   res: Response,
   _next: NextFunction
 ): void {
-  const statusCode = err.statusCode ?? 500
-  const message = err.isOperational ? err.message : 'Internal server error'
+  const normalizedError = toOperationalDatabaseError(err)
+  const statusCode = normalizedError.statusCode ?? 500
+  const message = normalizedError.isOperational ? normalizedError.message : 'Internal server error'
 
   const logMeta = {
     statusCode,
-    isOperational: Boolean(err.isOperational),
+    isOperational: Boolean(normalizedError.isOperational),
     error: err,
   }
 
@@ -35,7 +54,7 @@ export function errorHandler(
     success: false,
     message,
     ...(process.env.NODE_ENV === 'development' && {
-      stack: err.stack,
+      stack: normalizedError.stack,
     }),
   })
 }

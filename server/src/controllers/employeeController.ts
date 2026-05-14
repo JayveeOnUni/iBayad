@@ -3,9 +3,16 @@ import crypto from 'crypto'
 import { EmployeeModel, type EmployeeRow } from '../models/Employee'
 import { asyncHandler, createError } from '../middleware/errorHandler'
 import pool from '../utils/db'
-import { sendActivationEmail } from '../services/emailService'
+import { sendActivationEmail, type EmailDeliveryMetadata } from '../services/emailService'
 import { buildClientUrl } from '../config/environment'
 import { logger } from '../utils/logger'
+
+type PgError = Error & {
+  code?: string
+  constraint?: string
+  column?: string
+  table?: string
+}
 
 function positiveIntegerEnv(name: string, fallback: number, minimum: number): number {
   const rawValue = process.env[name]
@@ -62,6 +69,36 @@ function isEmployeeNumberDuplicateError(error: unknown): boolean {
   )
 }
 
+function isPgError(error: unknown): error is PgError {
+  return typeof error === 'object' && error !== null && 'code' in error
+}
+
+function isDuplicateEmailError(error: unknown): boolean {
+  return (
+    isPgError(error) &&
+    error.code === '23505' &&
+    (error.constraint?.includes('email') ?? false)
+  )
+}
+
+function toEmployeeWriteError(error: unknown): Error {
+  if (isDuplicateEmailError(error)) {
+    return createError('An employee or user account with that email already exists.', 409)
+  }
+
+  if (isPgError(error) && error.code === '42703') {
+    logger.error('Employee creation failed because the database schema is out of date', {
+      code: error.code,
+      column: error.column,
+      table: error.table,
+      constraint: error.constraint,
+    })
+    return createError('Database schema is out of date. Please run the latest migrations and try again.', 500)
+  }
+
+  return error instanceof Error ? error : createError('Unable to create employee account', 500)
+}
+
 function createActivationToken() {
   const token = crypto.randomBytes(32).toString('base64url')
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex')
@@ -88,6 +125,67 @@ async function sendEmployeeActivationLink(employee: Pick<EmployeeRow, 'first_nam
       'Activation email could not be sent. Check email provider settings, then try again.',
       502
     )
+  }
+}
+
+async function saveActivationEmailTracking(userId: string, delivery: EmailDeliveryMetadata): Promise<boolean> {
+  try {
+    await pool.query(
+      `UPDATE users
+       SET activation_sent_at = $1,
+           activation_email_sent_at = $1,
+           activation_email_message_id = $2,
+           activation_email_provider = $3,
+           activation_email_status = 'sent',
+           updated_at = NOW()
+       WHERE id = $4`,
+      [delivery.sentAt, delivery.messageId ?? null, delivery.provider, userId]
+    )
+    return true
+  } catch (error) {
+    logger.error('Activation email was sent, but delivery tracking could not be saved', {
+      userId,
+      messageId: delivery.messageId,
+      error,
+    })
+
+    if (isPgError(error) && error.code === '42703') {
+      try {
+        await pool.query(
+          `UPDATE users
+           SET activation_sent_at = $1,
+               updated_at = NOW()
+           WHERE id = $2`,
+          [delivery.sentAt, userId]
+        )
+        return false
+      } catch (fallbackError) {
+        logger.error('Fallback activation_sent_at tracking update also failed', {
+          userId,
+          error: fallbackError,
+        })
+      }
+    }
+
+    return false
+  }
+}
+
+async function markActivationEmailFailed(userId: string): Promise<void> {
+  try {
+    await pool.query(
+      `UPDATE users
+       SET activation_email_provider = 'resend',
+           activation_email_status = 'failed',
+           updated_at = NOW()
+       WHERE id = $1`,
+      [userId]
+    )
+  } catch (error) {
+    logger.error('Activation email failure status could not be saved', {
+      userId,
+      error,
+    })
   }
 }
 
@@ -141,8 +239,11 @@ export const createEmployee = asyncHandler(async (req: Request, res: Response) =
 
   const client = await pool.connect()
   let employee: EmployeeRow | undefined
+  let userId: string | undefined
   const activation = createActivationToken()
   let activationLink = ''
+  let activationEmailSent = false
+  let activationEmailTrackingSaved = false
   try {
     await client.query('BEGIN')
 
@@ -190,41 +291,50 @@ export const createEmployee = asyncHandler(async (req: Request, res: Response) =
 
     if (!employee) throw createError('Unable to generate a unique employee number', 500)
 
-    await client.query(
+    const userResult = await client.query(
       `INSERT INTO users (
          employee_id, email, password_hash, role, is_active,
          activation_token_hash, activation_token_expires_at
        )
-       VALUES ($1, $2, NULL, 'employee', false, $3, $4)`,
+       VALUES ($1, $2, NULL, 'employee', false, $3, $4)
+       RETURNING id`,
       [employee.id, employee.email, activation.tokenHash, activation.expiresAt]
     )
-
-    const delivery = await sendEmployeeActivationLink(employee, activation.token)
-    activationLink = delivery.activationLink
-    await client.query(
-      `UPDATE users
-       SET activation_sent_at = NOW(),
-           activation_email_message_id = $1,
-           updated_at = NOW()
-       WHERE employee_id = $2`,
-      [delivery.delivery.messageId ?? null, employee.id]
-    )
+    userId = userResult.rows[0]?.id
 
     await client.query('COMMIT')
   } catch (error) {
     await client.query('ROLLBACK')
-    throw error
+    throw toEmployeeWriteError(error)
   } finally {
     client.release()
   }
 
-  if (!employee) throw createError('Unable to create employee account', 500)
+  if (!employee || !userId) throw createError('Unable to create employee account', 500)
+
+  try {
+    const delivery = await sendEmployeeActivationLink(employee, activation.token)
+    activationLink = delivery.activationLink
+    activationEmailSent = true
+    activationEmailTrackingSaved = await saveActivationEmailTracking(userId, delivery.delivery)
+  } catch (error) {
+    await markActivationEmailFailed(userId)
+    logger.error('Employee account was created, but activation email delivery failed', {
+      employeeId: employee.id,
+      userId,
+      employeeEmail: employee.email,
+      error,
+    })
+  }
 
   res.status(201).json({
     success: true,
     data: employee,
-    message: `Employee account created. Activation email sent to ${employee.email}.`,
-    activationEmailSent: true,
+    message: activationEmailSent
+      ? `Employee account created. Activation email sent to ${employee.email}.`
+      : `Employee account created, but activation email could not be sent to ${employee.email}. Use resend activation after checking email provider settings.`,
+    activationEmailSent,
+    activationEmailTrackingSaved,
     ...(process.env.NODE_ENV !== 'production' ? { activationLink } : {}),
   })
 })
@@ -241,6 +351,7 @@ export const resendEmployeeActivation = asyncHandler(async (req: Request, res: R
     email: string
   } | undefined
   let activationLink = ''
+  let activationEmailTrackingSaved = false
 
   try {
     await client.query('BEGIN')
@@ -264,43 +375,40 @@ export const resendEmployeeActivation = asyncHandler(async (req: Request, res: R
        SET activation_token_hash = $1,
            activation_token_expires_at = $2,
            activation_sent_at = NULL,
-           activation_email_message_id = NULL,
            is_active = false,
            updated_at = NOW()
        WHERE id = $3`,
       [activation.tokenHash, activation.expiresAt, account.user_id]
     )
 
-    const delivery = await sendEmployeeActivationLink({
-      first_name: account.first_name,
-      last_name: account.last_name,
-      email: account.email,
-    }, activation.token)
-    activationLink = delivery.activationLink
-
-    await client.query(
-      `UPDATE users
-       SET activation_sent_at = NOW(),
-           activation_email_message_id = $1,
-           updated_at = NOW()
-       WHERE id = $2`,
-      [delivery.delivery.messageId ?? null, account.user_id]
-    )
-
     await client.query('COMMIT')
   } catch (error) {
     await client.query('ROLLBACK')
-    throw error
+    throw toEmployeeWriteError(error)
   } finally {
     client.release()
   }
 
   if (!account) throw createError('Employee account not found', 404)
 
+  try {
+    const delivery = await sendEmployeeActivationLink({
+      first_name: account.first_name,
+      last_name: account.last_name,
+      email: account.email,
+    }, activation.token)
+    activationLink = delivery.activationLink
+    activationEmailTrackingSaved = await saveActivationEmailTracking(account.user_id, delivery.delivery)
+  } catch (error) {
+    await markActivationEmailFailed(account.user_id)
+    throw error
+  }
+
   res.json({
     success: true,
     message: `Activation email sent to ${account.email}.`,
     activationEmailSent: true,
+    activationEmailTrackingSaved,
     ...(process.env.NODE_ENV !== 'production' ? { activationLink } : {}),
   })
 })

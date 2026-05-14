@@ -33,6 +33,7 @@ export interface SendEmailInput {
 
 export interface EmailDeliveryMetadata {
   emailType: EmailType
+  provider: 'resend'
   messageId?: string
   accepted: string[]
   rejected: string[]
@@ -133,6 +134,7 @@ function isRetryableResendError(error: ErrorResponse): boolean {
 function toDeliveryMetadata(emailType: EmailType, messageId: string | undefined, recipients: string[]): EmailDeliveryMetadata {
   return {
     emailType,
+    provider: 'resend',
     messageId,
     accepted: recipients,
     rejected: [],
