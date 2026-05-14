@@ -41,7 +41,6 @@ function mapPayrollIssueSummary(
     row.total_issue_count ?? row.totalIssueCount,
     fallback?.totalIssueCount ?? criticalIssueCount + warningIssueCount
   )
-
   return {
     criticalIssueCount,
     warningIssueCount,

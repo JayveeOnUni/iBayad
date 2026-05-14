@@ -272,7 +272,7 @@ export default function PayrollPage() {
   const focusIssueSummary = getPayrollIssueSummary(focusPeriod)
   const selectedIssueSummary = getPayrollIssueSummary(selectedPeriod)
   const warnings = selectedPeriod?.warnings ?? []
-  const isValidationDetailLoading = Boolean(selectedPeriod && isDetailLoading && !selectedPeriod.warnings)
+  const isLoadingValidationDetails = Boolean(selectedPeriod && isDetailLoading && !selectedPeriod.warnings)
   const actionKey = confirmAction ? `${confirmAction.action}:${confirmAction.period.id}` : null
   const canConfirmAction = Boolean(confirmAction && confirmAction.confirmation.trim() === actionPhrase[confirmAction.action])
 
@@ -689,7 +689,7 @@ export default function PayrollPage() {
                     </Badge>
                   </div>
                 </div>
-                {isValidationDetailLoading ? (
+                {isLoadingValidationDetails ? (
                   <p className="rounded-md border border-border bg-neutral-20 px-3 py-2 text-sm text-muted">
                     Loading payroll validation details...
                   </p>
