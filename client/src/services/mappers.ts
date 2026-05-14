@@ -7,6 +7,7 @@ import type {
   OffsetBalance,
   OffsetCredit,
   OffsetUsage,
+  PayrollIssueSummary,
   PayrollPeriod,
   PayrollRecord,
   PayrollWarning,
@@ -21,6 +22,31 @@ function str(value: unknown, fallback = ''): string {
 function num(value: unknown, fallback = 0): number {
   const n = Number(value)
   return Number.isFinite(n) ? n : fallback
+}
+
+function mapPayrollIssueSummary(
+  value: unknown,
+  fallback?: Partial<PayrollIssueSummary>
+): PayrollIssueSummary {
+  const row = value && typeof value === 'object' ? value as Row : {}
+  const criticalIssueCount = num(
+    row.critical_issue_count ?? row.criticalIssueCount,
+    fallback?.criticalIssueCount ?? 0
+  )
+  const warningIssueCount = num(
+    row.warning_issue_count ?? row.warningIssueCount,
+    fallback?.warningIssueCount ?? 0
+  )
+  const totalIssueCount = num(
+    row.total_issue_count ?? row.totalIssueCount,
+    fallback?.totalIssueCount ?? criticalIssueCount + warningIssueCount
+  )
+
+  return {
+    criticalIssueCount,
+    warningIssueCount,
+    totalIssueCount,
+  }
 }
 
 export function mapEmployee(row: Row): Employee {
@@ -265,6 +291,15 @@ export function mapLeave(row: Row): LeaveApplication {
 }
 
 export function mapPayrollPeriod(row: Row): PayrollPeriod {
+  const warningCount = num(row.warning_count ?? row.warningCount)
+  const issueSummarySource =
+    row.issue_summary
+    ?? row.issueSummary
+    ?? row.validation_summary
+    ?? row.validationSummary
+    ?? row.readiness_summary
+    ?? row.readinessSummary
+
   return {
     id: str(row.id),
     name: str(row.name),
@@ -286,7 +321,11 @@ export function mapPayrollPeriod(row: Row): PayrollPeriod {
     negativeNetCount: num(row.negative_net_count ?? row.negativeNetCount),
     pendingAttendanceRequestCount: num(row.pending_attendance_request_count ?? row.pendingAttendanceRequestCount),
     pendingLeaveRequestCount: num(row.pending_leave_request_count ?? row.pendingLeaveRequestCount),
-    warningCount: num(row.warning_count ?? row.warningCount),
+    warningCount,
+    issueSummary: mapPayrollIssueSummary(issueSummarySource, {
+      warningIssueCount: warningCount,
+      totalIssueCount: warningCount,
+    }),
     warnings: Array.isArray(row.warnings) ? row.warnings.map((warning) => mapPayrollWarning(warning as Row)) : undefined,
     auditHistory: Array.isArray(row.audit_history ?? row.auditHistory)
       ? ((row.audit_history ?? row.auditHistory) as Row[]).map(mapPayrollAuditEntry)

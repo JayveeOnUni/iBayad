@@ -331,6 +331,12 @@ export interface PayrollWarning {
   count?: number
 }
 
+export interface PayrollIssueSummary {
+  criticalIssueCount: number
+  warningIssueCount: number
+  totalIssueCount: number
+}
+
 export interface PayrollAuditEntry {
   id: string
   action: string
@@ -366,6 +372,7 @@ export interface PayrollPeriod {
   pendingAttendanceRequestCount?: number
   pendingLeaveRequestCount?: number
   warningCount?: number
+  issueSummary?: PayrollIssueSummary | null
   warnings?: PayrollWarning[]
   auditHistory?: PayrollAuditEntry[]
 }
