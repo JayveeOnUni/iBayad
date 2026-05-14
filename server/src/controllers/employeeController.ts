@@ -25,6 +25,20 @@ function emptyToNullIfPresent(value: unknown): string | null | undefined {
   return value === undefined ? undefined : emptyToNull(value)
 }
 
+function optionalGovernmentId(value: unknown, fieldName: string): string | null {
+  const normalized = emptyToNull(value)
+  if (!normalized) return null
+  if (normalized.length > 30) throw createError(`${fieldName} must be 30 characters or fewer`, 400)
+  if (!/^[0-9 -]+$/.test(normalized)) {
+    throw createError(`${fieldName} must contain only numbers, spaces, or hyphens`, 400)
+  }
+  return normalized
+}
+
+function optionalGovernmentIdIfPresent(value: unknown, fieldName: string): string | null | undefined {
+  return value === undefined ? undefined : optionalGovernmentId(value, fieldName)
+}
+
 function requiredDate(value: unknown, fieldName: string): string {
   const date = emptyToNull(value)
   if (!date) throw createError(`${fieldName} is required`, 400)
@@ -158,10 +172,10 @@ export const createEmployee = asyncHandler(async (req: Request, res: Response) =
           basic_salary: salary,
           daily_rate: Math.round(dailyRate * 100) / 100,
           hourly_rate: Math.round(hourlyRate * 100) / 100,
-          sss_number: emptyToNull(sssNumber),
-          philhealth_number: emptyToNull(philhealthNumber),
-          pagibig_number: emptyToNull(pagibigNumber),
-          tin_number: emptyToNull(tinNumber),
+          sss_number: optionalGovernmentId(sssNumber, 'SSS Number'),
+          philhealth_number: optionalGovernmentId(philhealthNumber, 'PhilHealth Number'),
+          pagibig_number: optionalGovernmentId(pagibigNumber, 'Pag-IBIG Number'),
+          tin_number: optionalGovernmentId(tinNumber, 'TIN Number'),
           bank_name: emptyToNull(bankName),
           bank_account_number: emptyToNull(bankAccountNumber),
           shift_id: emptyToNull(shiftId),
@@ -314,10 +328,10 @@ export const updateEmployee = asyncHandler(async (req: Request, res: Response) =
     employment_type: body.employmentType,
     hire_date: body.hireDate === undefined ? undefined : requiredDate(body.hireDate, 'hireDate'),
     basic_salary: body.basicSalary,
-    sss_number: emptyToNullIfPresent(body.sssNumber),
-    philhealth_number: emptyToNullIfPresent(body.philhealthNumber),
-    pagibig_number: emptyToNullIfPresent(body.pagibigNumber),
-    tin_number: emptyToNullIfPresent(body.tinNumber),
+    sss_number: optionalGovernmentIdIfPresent(body.sssNumber, 'SSS Number'),
+    philhealth_number: optionalGovernmentIdIfPresent(body.philhealthNumber, 'PhilHealth Number'),
+    pagibig_number: optionalGovernmentIdIfPresent(body.pagibigNumber, 'Pag-IBIG Number'),
+    tin_number: optionalGovernmentIdIfPresent(body.tinNumber, 'TIN Number'),
     bank_name: emptyToNullIfPresent(body.bankName),
     bank_account_number: emptyToNullIfPresent(body.bankAccountNumber),
     shift_id: emptyToNullIfPresent(body.shiftId),

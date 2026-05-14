@@ -31,6 +31,10 @@ const migrations = [
     name: '006_password_reset_email_fields',
     file: 'src/db/add-password-reset-email-fields.sql',
   },
+  {
+    name: '007_employee_government_id_fields',
+    file: 'src/db/add-employee-government-id-fields.sql',
+  },
 ]
 
 function resolveSqlFile(relativeFile) {

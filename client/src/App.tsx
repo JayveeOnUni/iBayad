@@ -18,7 +18,6 @@ import DailyLogPage from './pages/admin/attendance/DailyLogPage'
 import AttendanceRequestPage from './pages/admin/attendance/AttendanceRequestPage'
 import AttendanceSummaryPage from './pages/admin/attendance/AttendanceSummaryPage'
 import LeaveStatusPage from './pages/admin/leave/LeaveStatusPage'
-import LeaveRequestPage from './pages/admin/leave/LeaveRequestPage'
 import LeaveCalendarPage from './pages/admin/leave/LeaveCalendarPage'
 import RolesPage from './pages/admin/administration/RolesPage'
 import DepartmentsPage from './pages/admin/administration/DepartmentsPage'
@@ -91,7 +90,7 @@ export default function App() {
           <Route path="attendance/summary" element={<AttendanceSummaryPage />} />
 
           <Route path="leave/status" element={<LeaveStatusPage />} />
-          <Route path="leave/requests" element={<LeaveRequestPage />} />
+          <Route path="leave/requests" element={<Navigate to="/admin/leave/status" replace />} />
           <Route path="leave/calendar" element={<LeaveCalendarPage />} />
 
           <Route path="administration/roles" element={<RolesPage />} />

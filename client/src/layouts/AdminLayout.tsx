@@ -38,7 +38,6 @@ const adminNav: NavItem[] = [
     icon: <AlignLeft size={18} />,
     children: [
       { label: 'Status', to: '/admin/leave/status', icon: <ClipboardList size={15} /> },
-      { label: 'Requests', to: '/admin/leave/requests', icon: <FileText size={15} /> },
       { label: 'Calendar', to: '/admin/leave/calendar', icon: <CalendarDays size={15} /> },
     ],
   },

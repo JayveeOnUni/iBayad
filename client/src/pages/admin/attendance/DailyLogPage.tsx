@@ -1,25 +1,54 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Filter, Download, ChevronLeft, ChevronRight, Search } from 'lucide-react'
+import { CalendarDays, Download, ChevronLeft, ChevronRight, RotateCcw, Search } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
 import Card from '../../../components/ui/Card'
 import Button from '../../../components/ui/Button'
 import Table from '../../../components/ui/Table'
 import Badge from '../../../components/ui/Badge'
 import Avatar from '../../../components/ui/Avatar'
 import Input from '../../../components/ui/Input'
+import Select from '../../../components/ui/Select'
 import { FeedbackMessage, PageHeader } from '../../../components/ui/Page'
-import { formatDate, formatTime, addDays, format } from '../../../utils/dateHelpers'
-import type { AttendanceRecord } from '../../../types'
+import { formatDate, formatTime, addDays, format, parseISO } from '../../../utils/dateHelpers'
+import type { AttendanceRecord, AttendanceStatus, Employee } from '../../../types'
 import { attendanceService } from '../../../services/attendanceService'
+import { employeeService } from '../../../services/employeeService'
 
 const today = new Date()
+const todayKey = format(today, 'yyyy-MM-dd')
 
-const statusVariant: Record<string, 'success' | 'warning' | 'danger' | 'neutral' | 'info'> = {
+type AttendanceFilterStatus = AttendanceStatus | 'missing'
+type DisplayAttendanceRecord = Omit<AttendanceRecord, 'status'> & {
+  status: AttendanceFilterStatus
+  isMissing?: boolean
+}
+
+const statusVariant: Record<AttendanceFilterStatus, 'success' | 'warning' | 'danger' | 'neutral' | 'info'> = {
   present: 'success',
   late: 'warning',
   absent: 'danger',
   half_day: 'warning',
   on_leave: 'info',
   holiday: 'info',
+  missing: 'danger',
+}
+
+const statusLabels: Record<AttendanceFilterStatus, string> = {
+  present: 'Present',
+  late: 'Late',
+  absent: 'Absent',
+  half_day: 'Half Day',
+  on_leave: 'On Leave',
+  holiday: 'Holiday',
+  missing: 'Missing',
+}
+
+const filterStatuses: AttendanceFilterStatus[] = ['present', 'late', 'absent', 'on_leave', 'missing']
+
+function normalizeStatus(value: string | null): AttendanceFilterStatus | '' {
+  return value && filterStatuses.includes(value as AttendanceFilterStatus)
+    ? value as AttendanceFilterStatus
+    : ''
 }
 
 function minutesLabel(minutes: number) {
@@ -29,10 +58,14 @@ function minutesLabel(minutes: number) {
 }
 
 export default function DailyLogPage() {
-  const [selectedDate, setSelectedDate] = useState(today)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const initialDate = searchParams.get('date') || todayKey
+  const [selectedDate, setSelectedDate] = useState(initialDate)
   const [logs, setLogs] = useState<AttendanceRecord[]>([])
+  const [dateLogs, setDateLogs] = useState<AttendanceRecord[]>([])
+  const [employees, setEmployees] = useState<Employee[]>([])
   const [search, setSearch] = useState('')
-  const [status, setStatus] = useState('')
+  const [status, setStatus] = useState<AttendanceFilterStatus | ''>(normalizeStatus(searchParams.get('status')))
   const [isLoading, setIsLoading] = useState(true)
   const [message, setMessage] = useState<string | null>(null)
 
@@ -41,9 +74,16 @@ export default function DailyLogPage() {
       try {
         setIsLoading(true)
         setMessage(null)
-        const date = format(selectedDate, 'yyyy-MM-dd')
-        const res = await attendanceService.list({ startDate: date, endDate: date, status: status || undefined })
-        setLogs(res.data)
+        const dateParams = selectedDate ? { startDate: selectedDate, endDate: selectedDate } : {}
+        const apiStatus = status && status !== 'missing' ? status : undefined
+        const [tableRes, dateRes, employeeRes] = await Promise.all([
+          attendanceService.list({ ...dateParams, status: apiStatus }),
+          selectedDate ? attendanceService.list(dateParams) : Promise.resolve(null),
+          selectedDate ? employeeService.list({ limit: 1000, status: 'active' }) : Promise.resolve(null),
+        ])
+        setLogs(tableRes.data)
+        setDateLogs(dateRes?.data ?? tableRes.data)
+        setEmployees(employeeRes?.data ?? [])
       } catch (err) {
         setMessage(err instanceof Error ? err.message : 'Unable to load attendance logs.')
       } finally {
@@ -54,12 +94,66 @@ export default function DailyLogPage() {
     loadLogs()
   }, [selectedDate, status])
 
-  const filteredLogs = useMemo(() => logs.filter((log) => {
+  useEffect(() => {
+    const params = new URLSearchParams()
+    if (selectedDate) params.set('date', selectedDate)
+    if (status) params.set('status', status)
+    setSearchParams(params, { replace: true })
+  }, [selectedDate, setSearchParams, status])
+
+  const missingRows = useMemo<DisplayAttendanceRecord[]>(() => {
+    if (!selectedDate) return []
+    const recordedEmployeeIds = new Set(dateLogs.map((log) => log.employeeId))
+    return employees
+      .filter((employee) => !recordedEmployeeIds.has(employee.id))
+      .map((employee) => ({
+        id: `missing-${employee.id}-${selectedDate}`,
+        employeeId: employee.id,
+        employee: {
+          id: employee.id,
+          firstName: employee.firstName,
+          lastName: employee.lastName,
+          employeeNumber: employee.employeeNumber,
+        },
+        date: selectedDate,
+        requiredWorkMinutes: 0,
+        actualRenderedMinutes: 0,
+        hoursWorked: 0,
+        overtimeHours: 0,
+        excessMinutes: 0,
+        offsetEarnedMinutes: 0,
+        offsetUsedMinutes: 0,
+        lateMinutes: 0,
+        undertimeMinutes: 0,
+        status: 'missing',
+        isMissing: true,
+        createdAt: selectedDate,
+        updatedAt: selectedDate,
+      }))
+  }, [dateLogs, employees, selectedDate])
+
+  const tableRows = useMemo<DisplayAttendanceRecord[]>(() => {
+    return status === 'missing' ? missingRows : logs
+  }, [logs, missingRows, status])
+
+  const filteredLogs = useMemo(() => tableRows.filter((log) => {
     const employeeName = log.employee ? `${log.employee.firstName} ${log.employee.lastName}`.toLowerCase() : ''
     return employeeName.includes(search.toLowerCase())
-  }), [logs, search])
+  }), [search, tableRows])
 
-  const countStatus = (value: AttendanceRecord['status']) => filteredLogs.filter((log) => log.status === value).length
+  const summaryLogs = selectedDate ? dateLogs : logs
+  const countStatus = (value: AttendanceRecord['status']) => summaryLogs.filter((log) => log.status === value).length
+
+  const setAdjacentDate = (amount: number) => {
+    const base = selectedDate ? parseISO(selectedDate) : today
+    setSelectedDate(format(addDays(base, amount), 'yyyy-MM-dd'))
+  }
+
+  const resetFilters = () => {
+    setSelectedDate('')
+    setStatus('')
+    setSearch('')
+  }
 
   const exportLogs = () => {
     const csv = [
@@ -67,7 +161,7 @@ export default function DailyLogPage() {
       ...filteredLogs.map((log) => [
         log.employee ? `${log.employee.firstName} ${log.employee.lastName}` : log.employeeId,
         log.date,
-        log.scheduledShiftName ?? '',
+        log.isMissing ? 'No record' : log.scheduledShiftName ?? '',
         log.timeIn ?? '',
         log.timeOut ?? '',
         String(log.hoursWorked),
@@ -75,13 +169,13 @@ export default function DailyLogPage() {
         String(log.excessMinutes),
         String(log.offsetEarnedMinutes),
         String(log.offsetUsedMinutes),
-        log.status,
+        statusLabels[log.status],
       ]),
     ].map((row) => row.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(',')).join('\n')
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
     const link = document.createElement('a')
     link.href = url
-    link.download = `attendance-${format(selectedDate, 'yyyy-MM-dd')}.csv`
+    link.download = `attendance-${selectedDate || 'all'}${status ? `-${status}` : ''}.csv`
     link.click()
     URL.revokeObjectURL(url)
   }
@@ -104,69 +198,126 @@ export default function DailyLogPage() {
         </FeedbackMessage>
       )}
 
-      {/* Date navigator */}
       <Card>
-        <div className="flex items-center justify-between">
-          <button
-            type="button"
-            onClick={() => setSelectedDate((d) => addDays(d, -1))}
-            className="rounded-md p-2 text-muted transition-colors hover:bg-neutral-20 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-200"
-          >
-            <ChevronLeft size={18} />
-          </button>
-          <div className="text-center">
-            <p className="text-base font-semibold text-ink">{formatDate(selectedDate, 'EEEE')}</p>
-            <p className="text-sm text-muted">{formatDate(selectedDate, 'MMMM d, yyyy')}</p>
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-center justify-between gap-3 sm:justify-start">
+            <button
+              type="button"
+              onClick={() => setAdjacentDate(-1)}
+              className="rounded-md p-2 text-muted transition-colors hover:bg-neutral-20 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-200"
+              aria-label="Previous date"
+            >
+              <ChevronLeft size={18} />
+            </button>
+            <div className="min-w-0 text-center sm:min-w-48">
+              <p className="text-base font-semibold text-ink">
+                {selectedDate ? formatDate(selectedDate, 'EEEE') : 'All dates'}
+              </p>
+              <p className="text-sm text-muted">
+                {selectedDate ? formatDate(selectedDate, 'MMMM d, yyyy') : 'Date filter removed'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAdjacentDate(1)}
+              className="rounded-md p-2 text-muted transition-colors hover:bg-neutral-20 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-200"
+              aria-label="Next date"
+            >
+              <ChevronRight size={18} />
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() => setSelectedDate((d) => addDays(d, 1))}
-            className="rounded-md p-2 text-muted transition-colors hover:bg-neutral-20 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-200"
-          >
-            <ChevronRight size={18} />
-          </button>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(180px,220px)_auto_auto] sm:items-end">
+            <Input
+              label="Attendance date"
+              type="date"
+              value={selectedDate}
+              leftAddon={<CalendarDays size={15} />}
+              onChange={(e) => setSelectedDate(e.target.value)}
+            />
+            <Button type="button" variant="outline" size="sm" onClick={() => setSelectedDate(todayKey)}>
+              Today
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              leftIcon={<RotateCcw size={14} />}
+              onClick={resetFilters}
+            >
+              Show All
+            </Button>
+          </div>
         </div>
 
-        {/* Summary pills */}
-        <div className="flex gap-3 mt-4 flex-wrap">
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           {[
-            { label: 'Present', count: countStatus('present'), variant: 'success' as const },
-            { label: 'Late', count: countStatus('late'), variant: 'warning' as const },
-            { label: 'Absent', count: countStatus('absent'), variant: 'danger' as const },
-            { label: 'On Leave', count: countStatus('on_leave'), variant: 'info' as const },
+            { status: 'present' as const, count: countStatus('present'), variant: 'success' as const },
+            { status: 'late' as const, count: countStatus('late'), variant: 'warning' as const },
+            { status: 'absent' as const, count: countStatus('absent'), variant: 'danger' as const },
+            { status: 'on_leave' as const, count: countStatus('on_leave'), variant: 'info' as const },
+            { status: 'missing' as const, count: selectedDate ? missingRows.length : 0, variant: 'danger' as const },
           ].map((s) => (
-            <div key={s.label} className="flex items-center gap-2 rounded-lg border border-border bg-neutral-20 px-3 py-2">
-              <Badge variant={s.variant}>{s.label}</Badge>
-              <span className="text-sm font-semibold text-ink">{s.count}</span>
-            </div>
+            <button
+              key={s.status}
+              type="button"
+              onClick={() => setStatus((current) => current === s.status ? '' : s.status)}
+              aria-pressed={status === s.status}
+              className={[
+                'flex min-h-16 items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left transition duration-150',
+                'hover:-translate-y-0.5 hover:border-brand-200 hover:bg-brand-50/70 hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-200 active:translate-y-0',
+                status === s.status ? 'border-brand-200 bg-brand-50 shadow-card' : 'border-border bg-neutral-20',
+              ].join(' ')}
+            >
+              <Badge variant={s.variant}>{statusLabels[s.status]}</Badge>
+              <span className="text-lg font-semibold text-ink">{s.count}</span>
+            </button>
           ))}
         </div>
       </Card>
 
       <Card padding="none">
-        <div className="flex flex-col gap-3 border-b border-border px-5 py-4 sm:flex-row sm:items-center">
+        <div className="flex flex-col gap-3 border-b border-border px-5 py-4 lg:flex-row lg:items-end lg:justify-between">
           <Input
             type="text"
             placeholder="Search employee..."
             value={search}
             leftAddon={<Search size={15} />}
             onChange={(e) => setSearch(e.target.value)}
-            className="sm:max-w-xs"
+            className="lg:max-w-xs"
           />
-          <Button
-            variant="outline"
-            size="sm"
-            leftIcon={<Filter size={14} />}
-            onClick={() => setStatus((current) => current ? '' : 'late')}
-          >
-            Filter Status
-          </Button>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(180px,220px)_auto] sm:items-end">
+            <Select
+              label="Status filter"
+              value={status}
+              onChange={(e) => setStatus(normalizeStatus(e.target.value))}
+            >
+              <option value="">All statuses</option>
+              {filterStatuses.map((item) => (
+                <option key={item} value={item}>{statusLabels[item]}</option>
+              ))}
+            </Select>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              leftIcon={<RotateCcw size={14} />}
+              onClick={resetFilters}
+            >
+              Reset Filter
+            </Button>
+          </div>
         </div>
 
         <Table
           data={filteredLogs}
           rowKey={(r) => r.id}
           isLoading={isLoading}
+          emptyMessage={
+            status === 'missing' && !selectedDate
+              ? 'Choose a date to see employees with missing attendance.'
+              : 'No attendance records match the selected filters.'
+          }
           columns={[
             {
               key: 'employee',
@@ -184,7 +335,7 @@ export default function DailyLogPage() {
               key: 'shift',
               header: 'Shift',
               render: (row) => (
-                <span className="text-sm">{row.scheduledShiftName ?? '—'}</span>
+                <span className="text-sm">{row.isMissing ? 'No record' : row.scheduledShiftName ?? '—'}</span>
               ),
             },
             {
@@ -234,7 +385,7 @@ export default function DailyLogPage() {
               header: 'Status',
               render: (row) => (
                 <Badge variant={statusVariant[row.status]} dot>
-                  {row.status.replace('_', ' ')}
+                  {statusLabels[row.status]}
                 </Badge>
               ),
             },

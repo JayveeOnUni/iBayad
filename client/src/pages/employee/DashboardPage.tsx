@@ -178,7 +178,7 @@ export default function EmployeeDashboardPage() {
                 </div>
                 <div className="flex flex-col gap-px">
                   <span className="text-xs font-medium leading-[18px] text-neutral-90">{formatTime(attendance?.timeIn)}</span>
-                  <span className="text-xs leading-[18px] text-muted">{punchAction === 'in' ? 'Recording time in' : 'Punch in'}</span>
+                  <span className="text-xs leading-[18px] text-muted">{punchAction === 'in' ? 'Recording time in' : 'Time In'}</span>
                 </div>
               </button>
               <button
@@ -194,7 +194,7 @@ export default function EmployeeDashboardPage() {
                 </div>
                 <div className="flex flex-col gap-px">
                   <span className="text-xs font-medium leading-[18px] text-neutral-90">{formatTime(attendance?.timeOut)}</span>
-                  <span className="text-xs leading-[18px] text-muted">{punchAction === 'out' ? 'Recording time out' : 'Punch out'}</span>
+                  <span className="text-xs leading-[18px] text-muted">{punchAction === 'out' ? 'Recording time out' : 'Time Out'}</span>
                 </div>
               </button>
             </div>

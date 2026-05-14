@@ -32,6 +32,33 @@ const defaultEmployeeForm: EmployeeFormData = {
   employmentType: 'regular',
   hireDate: new Date().toISOString().slice(0, 10),
   basicSalary: 0,
+  sssNumber: '',
+  philhealthNumber: '',
+  pagibigNumber: '',
+  tinNumber: '',
+}
+
+const governmentIdFields = [
+  { key: 'sssNumber', label: 'SSS Number', placeholder: 'e.g. 12-3456789-0' },
+  { key: 'philhealthNumber', label: 'PhilHealth Number', placeholder: 'e.g. 12-345678901-2' },
+  { key: 'pagibigNumber', label: 'Pag-IBIG Number', placeholder: 'e.g. 1234-5678-9012' },
+  { key: 'tinNumber', label: 'TIN Number', placeholder: 'e.g. 123-456-789-000' },
+] as const
+
+function validateGovernmentId(value: string | undefined, label: string) {
+  const trimmed = value?.trim() ?? ''
+  if (!trimmed) return null
+  if (trimmed.length > 30) return `${label} must be 30 characters or fewer.`
+  if (!/^[0-9 -]+$/.test(trimmed)) return `${label} must contain only numbers, spaces, or hyphens.`
+  return null
+}
+
+function validateEmployeeForm(form: EmployeeFormData) {
+  for (const field of governmentIdFields) {
+    const error = validateGovernmentId(form[field.key], field.label)
+    if (error) return error
+  }
+  return null
 }
 
 export default function EmployeeListPage() {
@@ -79,6 +106,13 @@ export default function EmployeeListPage() {
   }
 
   const createEmployee = async () => {
+    const validationError = validateEmployeeForm(form)
+    if (validationError) {
+      setError(validationError)
+      setSuccess(null)
+      return
+    }
+
     try {
       setIsSaving(true)
       setError(null)
@@ -307,6 +341,18 @@ export default function EmployeeListPage() {
           <Input label="Phone" value={form.phone} onChange={(e) => updateForm('phone', e.target.value)} />
           <Input label="Hire Date" type="date" required value={form.hireDate} onChange={(e) => updateForm('hireDate', e.target.value)} />
           <Input label="Basic Salary" type="number" required value={form.basicSalary || ''} onChange={(e) => updateForm('basicSalary', Number(e.target.value))} />
+          {governmentIdFields.map((field) => (
+            <Input
+              key={field.key}
+              label={field.label}
+              placeholder={field.placeholder}
+              value={form[field.key] ?? ''}
+              inputMode="numeric"
+              pattern="[0-9 -]*"
+              maxLength={30}
+              onChange={(e) => updateForm(field.key, e.target.value)}
+            />
+          ))}
           <Input label="Department ID" value={form.departmentId} onChange={(e) => updateForm('departmentId', e.target.value)} />
           <Input label="Position ID" value={form.positionId} onChange={(e) => updateForm('positionId', e.target.value)} />
           <Input label="City" value={form.city} onChange={(e) => updateForm('city', e.target.value)} />

@@ -24,6 +24,7 @@ import { formatPeso } from '../../utils/taxComputation'
 
 type Tone = 'brand' | 'success' | 'warning' | 'danger' | 'neutral'
 type BadgeTone = 'success' | 'warning' | 'danger' | 'info' | 'neutral'
+type AttendanceDashboardFilter = 'present' | 'late' | 'absent' | 'on_leave' | 'missing'
 
 const severityBadge: Record<string, BadgeTone> = {
   info: 'info',
@@ -225,11 +226,16 @@ export default function AdminDashboardPage() {
 
   const firstName = user?.firstName ?? 'Admin'
   const payrollPeriod = dashboard.payroll.currentPeriod
+  const attendanceFilterDate = dashboard.attendanceToday.date || dashboard.today
   const readinessTone: Exclude<Tone, 'neutral'> = dashboard.attendanceReadiness.isPayrollReady
     ? 'success'
     : dashboard.attendanceReadiness.completionRate >= 90
       ? 'warning'
       : 'danger'
+  const openAttendanceFilter = (status: AttendanceDashboardFilter) => {
+    const params = new URLSearchParams({ date: attendanceFilterDate, status })
+    navigate(`/admin/attendance/daily?${params.toString()}`)
+  }
 
   return (
     <Page>
@@ -274,17 +280,23 @@ export default function AdminDashboardPage() {
               {' '}{plural(dashboard.attendanceToday.onLeaveToday, 'person', 'people')} on approved leave.
             </p>
           </div>
-          <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4 lg:min-w-[520px]">
+          <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3 lg:min-w-[620px] lg:grid-cols-5">
             {[
-              { label: 'Present', value: dashboard.attendanceToday.presentToday },
-              { label: 'Late', value: dashboard.attendanceToday.lateToday },
-              { label: 'Absent', value: dashboard.attendanceToday.absentToday },
-              { label: 'Missing', value: dashboard.attendanceToday.missingAttendance },
+              { label: 'Present', value: dashboard.attendanceToday.presentToday, status: 'present' as const },
+              { label: 'Late', value: dashboard.attendanceToday.lateToday, status: 'late' as const },
+              { label: 'Absent', value: dashboard.attendanceToday.absentToday, status: 'absent' as const },
+              { label: 'On Leave', value: dashboard.attendanceToday.onLeaveToday, status: 'on_leave' as const },
+              { label: 'Missing', value: dashboard.attendanceToday.missingAttendance, status: 'missing' as const },
             ].map((item) => (
-              <div key={item.label} className="rounded-lg bg-surface px-4 py-3">
+              <button
+                key={item.label}
+                type="button"
+                onClick={() => openAttendanceFilter(item.status)}
+                className="rounded-lg border border-transparent bg-surface px-4 py-3 text-left transition duration-150 hover:-translate-y-0.5 hover:border-brand-200 hover:bg-brand-50/70 hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-200 active:translate-y-0"
+              >
                 <p className="text-xl font-semibold text-ink">{item.value}</p>
                 <p className="text-xs text-muted">{item.label}</p>
-              </div>
+              </button>
             ))}
           </div>
         </div>
@@ -307,7 +319,7 @@ export default function AdminDashboardPage() {
         <Card className="xl:col-span-2">
           <CardHeader
             title="Who Needs Attention Today"
-            subtitle="Employees with missing records, late arrivals, absences, or incomplete punches."
+            subtitle="Employees with missing records, late arrivals, absences, or incomplete time logs."
             action={
               <Button size="xs" variant="outline" onClick={() => navigate('/admin/attendance/daily')}>
                 Daily Log
