@@ -39,6 +39,34 @@ const migrations = [
     name: '008_activation_email_tracking_fields',
     file: 'src/db/add-activation-email-tracking-fields.sql',
   },
+  {
+    name: '009_phase1_payroll_foundation',
+    file: 'src/db/add-phase1-payroll-foundation.sql',
+  },
+  {
+    name: '010_phase2_payroll_compliance',
+    file: 'src/db/add-phase2-payroll-compliance.sql',
+  },
+  {
+    name: '011_phase3_payroll_statuses',
+    file: 'src/db/add-phase3-payroll-statuses.sql',
+  },
+  {
+    name: '012_phase3_payroll_governance',
+    file: 'src/db/add-phase3-payroll-governance.sql',
+  },
+  {
+    name: '013_phase3_payroll_lock_trigger_fix',
+    file: 'src/db/add-phase3-payroll-lock-trigger-fix.sql',
+  },
+  {
+    name: '014_phase4_payslip_reporting',
+    file: 'src/db/add-phase4-payslip-reporting.sql',
+  },
+  {
+    name: '015_employee_work_hours_precision',
+    file: 'src/db/add-employee-work-hours-precision.sql',
+  },
 ]
 
 function resolveSqlFile(relativeFile) {

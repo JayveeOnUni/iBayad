@@ -8,11 +8,13 @@ import {
   Eye,
   FileText,
   History,
+  Lock,
   Play,
   Plus,
   RefreshCcw,
   Search,
   ShieldCheck,
+  Undo2,
   Users,
 } from 'lucide-react'
 import Card, { CardHeader, StatCard } from '../../../components/ui/Card'
@@ -22,18 +24,30 @@ import Badge from '../../../components/ui/Badge'
 import Modal from '../../../components/ui/Modal'
 import Input from '../../../components/ui/Input'
 import Select from '../../../components/ui/Select'
+import Textarea from '../../../components/ui/Textarea'
 import { EmptyState, FeedbackMessage, PageHeader } from '../../../components/ui/Page'
 import { formatDate, formatDateTime } from '../../../utils/dateHelpers'
 import { formatPeso } from '../../../utils/taxComputation'
-import type { PayFrequency, PayrollAuditEntry, PayrollPeriod, PayrollRecord, PayrollStatus } from '../../../types'
+import type {
+  PayFrequency,
+  PayrollAuditEntry,
+  PayrollCalculationSnapshot,
+  PayrollPeriod,
+  PayrollRecord,
+  PayrollReport,
+  PayrollReportType,
+  PayrollStatus,
+  PayrollValidationReport,
+} from '../../../types'
 import { payrollService } from '../../../services/payrollService'
+import { useAuthStore } from '../../../store/authStore'
 
 type PageMessage = {
   variant: 'success' | 'error' | 'warning' | 'info'
   text: string
 }
 
-type PayrollAction = 'process' | 'approve' | 'release'
+type PayrollAction = 'process' | 'approve' | 'release' | 'correction'
 
 type PeriodForm = {
   name: string
@@ -44,9 +58,14 @@ type PeriodForm = {
 }
 
 const statusVariant: Record<PayrollStatus, 'success' | 'info' | 'neutral' | 'warning' | 'danger'> = {
+  locked: 'success',
   released: 'success',
   approved: 'success',
+  ready_for_approval: 'info',
+  processed: 'info',
   processing: 'info',
+  validation_failed: 'danger',
+  needs_correction: 'warning',
   draft: 'neutral',
   cancelled: 'danger',
 }
@@ -62,6 +81,21 @@ const actionPhrase: Record<PayrollAction, string> = {
   process: 'PROCESS',
   approve: 'APPROVE',
   release: 'RELEASE',
+  correction: 'CORRECTION',
+}
+
+const payrollPermissionsByRole: Record<string, string[] | '*'> = {
+  admin: '*',
+  super_admin: '*',
+  payroll_preparer: ['create_period', 'process', 'validate', 'reprocess', 'view', 'view_payslips', 'view_reports', 'export_reports'],
+  payroll_approver: ['validate', 'approve', 'request_correction', 'view', 'view_payslips', 'view_reports', 'export_reports'],
+  payroll_releaser: ['release', 'view', 'view_payslips', 'view_reports'],
+  auditor: ['view', 'view_payslips', 'view_reports', 'export_reports', 'view_audit_logs'],
+}
+
+function hasPayrollPermission(role: string | undefined, permission: string) {
+  const permissions = role ? payrollPermissionsByRole[role] : undefined
+  return permissions === '*' || Boolean(permissions?.includes(permission))
 }
 
 const today = () => new Date().toISOString().slice(0, 10)
@@ -84,18 +118,21 @@ function statusLabel(status: string) {
 function actionTitle(action: PayrollAction) {
   if (action === 'process') return 'Process payroll period'
   if (action === 'approve') return 'Approve payroll period'
+  if (action === 'correction') return 'Request payroll correction'
   return 'Release payroll period'
 }
 
 function actionButtonLabel(action: PayrollAction, period: PayrollPeriod) {
-  if (action === 'process') return period.status === 'processing' ? 'Reprocess' : 'Process'
+  if (action === 'process') return period.recordCount ? 'Reprocess' : 'Process'
   if (action === 'approve') return 'Approve'
+  if (action === 'correction') return 'Correction'
   return 'Release'
 }
 
 function actionSuccessText(action: PayrollAction) {
   if (action === 'process') return 'Payroll processed.'
   if (action === 'approve') return 'Payroll approved.'
+  if (action === 'correction') return 'Payroll marked for correction.'
   return 'Payroll released.'
 }
 
@@ -105,9 +142,9 @@ function warningBadgeVariant(severity: string): 'info' | 'warning' | 'danger' {
   return 'info'
 }
 
-function offsetHours(minutes: number) {
-  const hours = (minutes || 0) / 60
-  return `${Number.isInteger(hours) ? hours.toFixed(0) : hours.toFixed(1)}h`
+function shortRuleVersion(value?: string) {
+  if (!value) return 'No rule'
+  return value.split('|').map((part) => part.replace(/BIR-RR-11-2018-2023-/, 'BIR-')).join(' | ')
 }
 
 function validatePeriodForm(form: PeriodForm): string | null {
@@ -148,7 +185,28 @@ function employeeName(record: PayrollRecord) {
   return `${record.employee.firstName} ${record.employee.lastName}`.trim()
 }
 
+const reportTypes: Array<{ type: PayrollReportType; label: string }> = [
+  { type: 'summary', label: 'Summary' },
+  { type: 'employees', label: 'Employee Payroll' },
+  { type: 'government-contributions', label: 'Government' },
+  { type: 'tax', label: 'Tax' },
+  { type: 'loans', label: 'Loans' },
+  { type: 'attendance', label: 'Attendance' },
+]
+
+function prettyColumn(value: string) {
+  return value.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function renderReportValue(key: string, value: unknown) {
+  const amountLike = /(pay|deduction|tax|share|contribution|income|amount|balance|gross|net|scheduled)/i.test(key)
+  if (amountLike && Number.isFinite(Number(value))) return formatPeso(Number(value))
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10)
+  return value == null || value === '' ? '—' : String(value)
+}
+
 export default function PayrollPage() {
+  const currentUser = useAuthStore((state) => state.user)
   const [periodPage, setPeriodPage] = useState(1)
   const [recordPage, setRecordPage] = useState(1)
   const [periods, setPeriods] = useState<PayrollPeriod[]>([])
@@ -157,6 +215,7 @@ export default function PayrollPage() {
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(null)
   const [selectedPeriod, setSelectedPeriod] = useState<PayrollPeriod | null>(null)
   const [records, setRecords] = useState<PayrollRecord[]>([])
+  const [validationReport, setValidationReport] = useState<PayrollValidationReport | null>(null)
   const [filters, setFilters] = useState<{ status: 'all' | PayrollStatus; year: string; search: string }>({
     status: 'all',
     year: 'all',
@@ -174,7 +233,28 @@ export default function PayrollPage() {
     action: PayrollAction
     period: PayrollPeriod
     confirmation: string
+    notes: string
   } | null>(null)
+  const [snapshotModal, setSnapshotModal] = useState<{
+    record: PayrollRecord
+    snapshots: PayrollCalculationSnapshot[]
+  } | null>(null)
+  const [reportType, setReportType] = useState<PayrollReportType>('summary')
+  const [report, setReport] = useState<PayrollReport | null>(null)
+  const [reportFilters, setReportFilters] = useState<{ status: 'all' | PayrollStatus; search: string }>({
+    status: 'all',
+    search: '',
+  })
+  const [isReportLoading, setIsReportLoading] = useState(false)
+  const canCreatePeriod = hasPayrollPermission(currentUser?.role, 'create_period')
+  const canProcessPayroll = hasPayrollPermission(currentUser?.role, 'process')
+  const canValidatePayroll = hasPayrollPermission(currentUser?.role, 'validate')
+  const canApprovePayroll = hasPayrollPermission(currentUser?.role, 'approve')
+  const canRequestCorrection = hasPayrollPermission(currentUser?.role, 'request_correction')
+  const canReleasePayroll = hasPayrollPermission(currentUser?.role, 'release')
+  const canViewAudit = hasPayrollPermission(currentUser?.role, 'view_audit_logs')
+  const canViewReports = hasPayrollPermission(currentUser?.role, 'view_reports')
+  const canExportReports = hasPayrollPermission(currentUser?.role, 'export_reports')
 
   const loadPeriods = useCallback(async (options?: { preserveMessage?: boolean; rethrow?: boolean }) => {
     try {
@@ -212,12 +292,16 @@ export default function PayrollPage() {
       setIsDetailLoading(true)
       if (!options?.preserveMessage) setMessage(null)
       const pageToLoad = options?.page ?? recordPage
-      const [periodRes, recordRes] = await Promise.all([
+      const [periodRes, recordRes, validationRes] = await Promise.all([
         payrollService.getPeriod(periodId),
         payrollService.listRecords({ periodId, page: pageToLoad, limit: recordMeta.limit }),
+        canValidatePayroll
+          ? payrollService.getValidation(periodId)
+          : Promise.resolve({ data: null }),
       ])
       setSelectedPeriod(periodRes.data)
       setRecords(recordRes.data)
+      setValidationReport(validationRes.data)
       setRecordMeta({ total: recordRes.total, totalPages: recordRes.totalPages, limit: recordRes.limit })
     } catch (err) {
       const text = err instanceof Error ? err.message : 'Unable to load payroll period details.'
@@ -226,7 +310,7 @@ export default function PayrollPage() {
     } finally {
       setIsDetailLoading(false)
     }
-  }, [recordMeta.limit, recordPage])
+  }, [canValidatePayroll, recordMeta.limit, recordPage])
 
   useEffect(() => {
     loadPeriods()
@@ -250,8 +334,24 @@ export default function PayrollPage() {
 
   const focusPeriod = selectedPeriod ?? periods[0]
   const warnings = selectedPeriod?.warnings ?? []
+  const selectedValidationIssues = validationReport
+    ? (validationReport.periodId === selectedPeriod?.id ? validationReport.issues : [])
+    : []
+  const focusValidationReport = validationReport?.periodId === focusPeriod?.id ? validationReport : null
+  const hasCriticalValidationIssues =
+    !!validationReport &&
+    validationReport.periodId === selectedPeriod?.id &&
+    validationReport.criticalIssueCount > 0
   const actionKey = confirmAction ? `${confirmAction.action}:${confirmAction.period.id}` : null
-  const canConfirmAction = Boolean(confirmAction && confirmAction.confirmation.trim() === actionPhrase[confirmAction.action])
+  const needsActionNotes = Boolean(confirmAction && (
+    confirmAction.action === 'correction' ||
+    (confirmAction.action === 'process' && ((confirmAction.period.recordCount ?? 0) > 0 || confirmAction.period.status !== 'draft'))
+  ))
+  const canConfirmAction = Boolean(
+    confirmAction &&
+    confirmAction.confirmation.trim() === actionPhrase[confirmAction.action] &&
+    (!needsActionNotes || confirmAction.notes.trim().length > 0)
+  )
 
   const openPeriod = (period: PayrollPeriod) => {
     setSelectedPeriodId(period.id)
@@ -294,9 +394,29 @@ export default function PayrollPage() {
     }
   }
 
+  const validateSelectedPayroll = async () => {
+    if (!selectedPeriod) return
+    try {
+      setActionLoading(`validate:${selectedPeriod.id}`)
+      setMessage(null)
+      const res = await payrollService.validatePeriod(selectedPeriod.id)
+      setValidationReport(res.data)
+      await loadPeriods({ preserveMessage: true })
+      await loadPeriodDetails(selectedPeriod.id, { preserveMessage: true })
+      setMessage({
+        variant: res.data.isValid ? 'success' : 'warning',
+        text: res.data.isValid ? 'Validation Passed' : 'Validation Issues Found. Fix Issues Before Approval.',
+      })
+    } catch (err) {
+      setMessage({ variant: 'error', text: err instanceof Error ? err.message : 'Unable to validate payroll.' })
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
   const runConfirmedAction = async () => {
     if (!confirmAction) return
-    const { action, period } = confirmAction
+    const { action, period, notes } = confirmAction
     const loadingKey = `${action}:${period.id}`
 
     try {
@@ -305,13 +425,16 @@ export default function PayrollPage() {
 
       let successText = actionSuccessText(action)
       if (action === 'process') {
-        const res = await payrollService.processPayroll(period.id)
+        const res = await payrollService.processPayroll(period.id, notes.trim() || undefined)
         successText = res.data.message || res.message || successText
       } else if (action === 'approve') {
-        const res = await payrollService.approvePayroll(period.id)
+        const res = await payrollService.approvePayroll(period.id, notes.trim() || undefined)
+        successText = res.message || successText
+      } else if (action === 'correction') {
+        const res = await payrollService.requestCorrection(period.id, notes.trim())
         successText = res.message || successText
       } else {
-        const res = await payrollService.markAsPaid(period.id)
+        const res = await payrollService.markAsPaid(period.id, notes.trim() || undefined)
         successText = res.message || successText
       }
 
@@ -343,7 +466,7 @@ export default function PayrollPage() {
       const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
-      link.download = `payslip-${record.employee?.employeeNumber ?? record.id}.txt`
+      link.download = `payslip-${record.employee?.employeeNumber ?? record.id}.pdf`
       link.click()
       URL.revokeObjectURL(url)
       setMessage({ variant: 'success', text: 'Payslip downloaded.' })
@@ -354,38 +477,124 @@ export default function PayrollPage() {
     }
   }
 
+  const viewSnapshots = async (record: PayrollRecord) => {
+    try {
+      setActionLoading(`snapshots:${record.id}`)
+      const res = await payrollService.listRecordSnapshots(record.id)
+      setSnapshotModal({ record, snapshots: res.data })
+    } catch (err) {
+      setMessage({ variant: 'error', text: err instanceof Error ? err.message : 'Unable to load calculation snapshots.' })
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const loadReport = async () => {
+    if (!selectedPeriod || !canViewReports) return
+    try {
+      setIsReportLoading(true)
+      setMessage(null)
+      const res = await payrollService.getPayrollReport(selectedPeriod.id, reportType, {
+        ...(reportFilters.status !== 'all' ? { status: reportFilters.status } : {}),
+        ...(reportFilters.search.trim() ? { search: reportFilters.search.trim() } : {}),
+      })
+      setReport(res.data)
+    } catch (err) {
+      setReport(null)
+      setMessage({ variant: 'error', text: err instanceof Error ? err.message : 'Unable to load payroll report.' })
+    } finally {
+      setIsReportLoading(false)
+    }
+  }
+
+  const exportReport = async () => {
+    if (!selectedPeriod || !canExportReports) return
+    try {
+      setActionLoading(`export:${reportType}`)
+      const res = await payrollService.exportPayrollReport(selectedPeriod.id, reportType, {
+        ...(reportFilters.status !== 'all' ? { status: reportFilters.status } : {}),
+        ...(reportFilters.search.trim() ? { search: reportFilters.search.trim() } : {}),
+      })
+      if (!res.ok) throw new Error('Unable to export report.')
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      const disposition = res.headers.get('content-disposition') ?? ''
+      const match = /filename="?([^"]+)"?/i.exec(disposition)
+      link.href = url
+      link.download = match?.[1] ?? `${reportType}-${selectedPeriod.startDate}-to-${selectedPeriod.endDate}.csv`
+      link.click()
+      URL.revokeObjectURL(url)
+      setMessage({ variant: 'success', text: 'Report exported.' })
+    } catch (err) {
+      setMessage({ variant: 'error', text: err instanceof Error ? err.message : 'Unable to export report.' })
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  useEffect(() => {
+    if (!selectedPeriod || !canViewReports) {
+      setReport(null)
+      return
+    }
+    loadReport()
+  }, [selectedPeriod?.id, reportType, reportFilters.status, reportFilters.search, canViewReports])
+
   const renderActions = (period: PayrollPeriod) => {
     const isBusy = Boolean(actionLoading)
+    const approveBlocked = Boolean(
+      period.status === 'ready_for_approval' &&
+      validationReport?.periodId === period.id &&
+      validationReport.criticalIssueCount > 0
+    )
+    const isLocked = period.isLocked || period.status === 'locked'
+    const canProcess = canProcessPayroll && ['draft', 'processing', 'processed', 'validation_failed', 'needs_correction'].includes(period.status) && !isLocked
     return (
       <div className="flex flex-wrap items-center justify-end gap-2">
-        {(period.status === 'draft' || period.status === 'processing') && (
+        {canProcess && (
           <Button
             size="xs"
             leftIcon={<Play size={12} />}
             disabled={isBusy}
             onClick={(event) => {
               event.stopPropagation()
-              setConfirmAction({ action: 'process', period, confirmation: '' })
+              setConfirmAction({ action: 'process', period, confirmation: '', notes: '' })
             }}
           >
             {actionButtonLabel('process', period)}
           </Button>
         )}
-        {period.status === 'processing' && (
+        {canApprovePayroll && period.status === 'ready_for_approval' && (
           <Button
             size="xs"
             variant="secondary"
             leftIcon={<CheckCircle size={12} />}
-            disabled={isBusy}
+            disabled={isBusy || approveBlocked}
+            title={approveBlocked ? 'Fix validation issues before approval' : undefined}
             onClick={(event) => {
               event.stopPropagation()
-              setConfirmAction({ action: 'approve', period, confirmation: '' })
+              setConfirmAction({ action: 'approve', period, confirmation: '', notes: '' })
             }}
           >
             Approve
           </Button>
         )}
-        {period.status === 'approved' && (
+        {canRequestCorrection && ['processed', 'validation_failed', 'ready_for_approval', 'approved'].includes(period.status) && !isLocked && (
+          <Button
+            size="xs"
+            variant="outline"
+            leftIcon={<Undo2 size={12} />}
+            disabled={isBusy}
+            onClick={(event) => {
+              event.stopPropagation()
+              setConfirmAction({ action: 'correction', period, confirmation: '', notes: '' })
+            }}
+          >
+            Correction
+          </Button>
+        )}
+        {canReleasePayroll && period.status === 'approved' && (
           <Button
             size="xs"
             variant="success"
@@ -393,7 +602,7 @@ export default function PayrollPage() {
             disabled={isBusy}
             onClick={(event) => {
               event.stopPropagation()
-              setConfirmAction({ action: 'release', period, confirmation: '' })
+              setConfirmAction({ action: 'release', period, confirmation: '', notes: '' })
             }}
           >
             Release
@@ -433,9 +642,11 @@ export default function PayrollPage() {
             >
               Refresh
             </Button>
-            <Button size="sm" leftIcon={<Plus size={14} />} onClick={() => setIsNewOpen(true)}>
-              New Period
-            </Button>
+            {canCreatePeriod && (
+              <Button size="sm" leftIcon={<Plus size={14} />} onClick={() => setIsNewOpen(true)}>
+                New Period
+              </Button>
+            )}
           </>
         }
       />
@@ -469,11 +680,13 @@ export default function PayrollPage() {
           tone="warning"
         />
         <StatCard
-          label="Warnings"
-          value={focusPeriod?.warningCount ?? 0}
-          delta={(focusPeriod?.warningCount ?? 0) > 0 ? 'Review before approval or release' : 'No blocking warnings reported'}
+          label="Validation"
+          value={focusValidationReport ? focusValidationReport.criticalIssueCount : focusPeriod?.warningCount ?? 0}
+          delta={focusValidationReport
+            ? (focusValidationReport.isValid ? 'Validation Passed' : 'Fix Issues Before Approval')
+            : 'Validate before approval'}
           icon={<AlertTriangle size={20} />}
-          tone={(focusPeriod?.warningCount ?? 0) > 0 ? 'danger' : 'neutral'}
+          tone={hasCriticalValidationIssues ? 'danger' : 'neutral'}
         />
       </div>
 
@@ -506,8 +719,13 @@ export default function PayrollPage() {
               <option value="all">All statuses</option>
               <option value="draft">Draft</option>
               <option value="processing">Processing</option>
+              <option value="processed">Processed</option>
+              <option value="validation_failed">Validation failed</option>
+              <option value="ready_for_approval">Ready for approval</option>
+              <option value="needs_correction">Needs correction</option>
               <option value="approved">Approved</option>
               <option value="released">Released</option>
+              <option value="locked">Locked</option>
               <option value="cancelled">Cancelled</option>
             </Select>
           </div>
@@ -634,21 +852,123 @@ export default function PayrollPage() {
                 </div>
               </div>
 
-              <div className="mt-5 border-t border-border pt-5">
-                <div className="mb-3 flex items-center gap-2">
-                  <AlertTriangle size={16} className="text-warning" />
-                  <p className="text-sm font-semibold text-ink">Warnings</p>
+              {(selectedPeriod.isLocked || selectedPeriod.status === 'locked') && (
+                <div className="mt-5 flex items-start gap-3 rounded-md border border-success-border bg-success-muted px-3 py-3 text-sm text-ink">
+                  <Lock size={16} className="mt-0.5 text-success" />
+                  <div>
+                    <p className="font-semibold">Locked Payroll</p>
+                    <p className="text-muted">
+                      Released payroll is read-only. Payslips remain available, but recalculation and edits are blocked.
+                    </p>
+                  </div>
                 </div>
-                {warnings.length === 0 ? (
+              )}
+
+              <div className="mt-5 border-t border-border pt-5">
+                <p className="mb-3 text-sm font-semibold text-ink">Payroll Status Timeline</p>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
+                  {[
+                    ['Created', selectedPeriod.createdAt],
+                    ['Processed', selectedPeriod.processedAt],
+                    ['Validated', selectedPeriod.validatedAt],
+                    ['Approved', selectedPeriod.approvedAt],
+                    ['Released', selectedPeriod.releasedAt],
+                    ['Locked', selectedPeriod.lockedAt],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded-md border border-border px-3 py-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</p>
+                      <p className="mt-1 text-xs text-ink">{value ? formatDateTime(value) : 'Pending'}</p>
+                    </div>
+                  ))}
+                </div>
+                {(selectedPeriod.approvalNotes || selectedPeriod.correctionNotes || selectedPeriod.lockedReason) && (
+                  <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+                    {selectedPeriod.approvalNotes && <p className="rounded-md border border-border px-3 py-2 text-sm text-muted">Approval: {selectedPeriod.approvalNotes}</p>}
+                    {selectedPeriod.correctionNotes && <p className="rounded-md border border-warning-border bg-warning-muted px-3 py-2 text-sm text-ink">Correction: {selectedPeriod.correctionNotes}</p>}
+                    {selectedPeriod.lockedReason && <p className="rounded-md border border-border px-3 py-2 text-sm text-muted">Lock: {selectedPeriod.lockedReason}</p>}
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-5 border-t border-border pt-5">
+                <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle size={16} className={hasCriticalValidationIssues ? 'text-danger' : 'text-success'} />
+                    <p className="text-sm font-semibold text-ink">Payroll Validation</p>
+                    {validationReport?.periodId === selectedPeriod.id && (
+                      <Badge variant={validationReport.isValid ? 'success' : 'danger'}>
+                        {validationReport.isValid ? 'Validation Passed' : 'Validation Issues Found'}
+                      </Badge>
+                    )}
+                  </div>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    leftIcon={<ShieldCheck size={12} />}
+                    isLoading={actionLoading === `validate:${selectedPeriod.id}`}
+                    disabled={Boolean(actionLoading) || !canValidatePayroll}
+                    title={!canValidatePayroll ? 'You do not have permission to validate payroll' : undefined}
+                    onClick={validateSelectedPayroll}
+                  >
+                    Validate Payroll
+                  </Button>
+                </div>
+                {validationReport?.periodId === selectedPeriod.id && (
+                  <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+                    <div className="rounded-md border border-border px-3 py-2">
+                      <p className="text-xs text-muted">Complete Attendance</p>
+                      <p className="text-sm font-semibold text-ink">
+                        {validationReport.attendance.completeEmployees}/{validationReport.attendance.totalEmployees}
+                      </p>
+                    </div>
+                    <div className="rounded-md border border-border px-3 py-2">
+                      <p className="text-xs text-muted">Missing Attendance</p>
+                      <p className="text-sm font-semibold text-danger">
+                        {validationReport.attendance.employeesWithMissingAttendance}
+                      </p>
+                    </div>
+                    <div className="rounded-md border border-border px-3 py-2">
+                      <p className="text-xs text-muted">Negative Net Pay</p>
+                      <p className="text-sm font-semibold text-danger">
+                        {validationReport.payroll.employeesWithNegativeNetPay}
+                      </p>
+                    </div>
+                    <div className="rounded-md border border-border px-3 py-2">
+                      <p className="text-xs text-muted">Rule Versions</p>
+                      <p className={`text-sm font-semibold ${validationReport.statutory.isComplete ? 'text-success' : 'text-danger'}`}>
+                        {validationReport.statutory.isComplete ? 'Complete' : `${validationReport.statutory.missingRules.length} missing`}
+                      </p>
+                    </div>
+                    <div className="rounded-md border border-border px-3 py-2">
+                      <p className="text-xs text-muted">Leave Adjustments</p>
+                      <p className="text-sm font-semibold text-ink">
+                        {validationReport.leaveAdjustments.unappliedLeaveAdjustments} unapplied
+                      </p>
+                    </div>
+                    <div className="rounded-md border border-border px-3 py-2">
+                      <p className="text-xs text-muted">Loan Issues</p>
+                      <p className="text-sm font-semibold text-danger">
+                        {validationReport.loans.duplicateLoanDeductions + validationReport.loans.deductionsExceedingBalance}
+                      </p>
+                    </div>
+                    <div className="rounded-md border border-border px-3 py-2">
+                      <p className="text-xs text-muted">Taxable Income</p>
+                      <p className="text-sm font-semibold text-danger">
+                        {validationReport.payroll.employeesWithInvalidTaxableIncome}
+                      </p>
+                    </div>
+                  </div>
+                )}
+                {(selectedValidationIssues.length === 0 && warnings.length === 0) ? (
                   <p className="rounded-md border border-border bg-neutral-20 px-3 py-2 text-sm text-muted">
-                    No warnings reported for this payroll period.
+                    No validation issues reported for this payroll period.
                   </p>
                 ) : (
                   <div className="divide-y divide-border rounded-md border border-border">
-                    {warnings.map((warning) => (
+                    {(selectedValidationIssues.length ? selectedValidationIssues : warnings).map((warning) => (
                       <div key={warning.code} className="flex items-start gap-3 px-3 py-3">
-                        <Badge variant={warningBadgeVariant(warning.severity)}>
-                          {warning.severity}
+                        <Badge variant={warning.severity === 'critical' ? 'danger' : warningBadgeVariant(warning.severity)}>
+                          {warning.severity === 'critical' ? 'critical' : warning.severity}
                         </Badge>
                         <p className="text-sm leading-6 text-ink">{warning.message}</p>
                       </div>
@@ -658,29 +978,120 @@ export default function PayrollPage() {
               </div>
             </Card>
 
-            <Card>
-              <CardHeader
-                title="Audit History"
-                subtitle="Latest period events"
-                action={<History size={17} className="text-muted" />}
-              />
-              {selectedPeriod.auditHistory?.length ? (
-                <div className="space-y-3">
-                  {selectedPeriod.auditHistory.map((entry) => (
-                    <div key={entry.id} className="border-b border-border pb-3 last:border-0 last:pb-0">
-                      <p className="text-sm font-medium capitalize text-ink">{auditLabel(entry)}</p>
-                      <p className="text-xs leading-5 text-muted">{auditDetail(entry)}</p>
-                      <p className="text-xs text-muted">
-                        {entry.actorEmail ?? 'System'} - {formatDateTime(entry.createdAt)}
-                      </p>
-                    </div>
+            {canViewAudit && (
+              <Card>
+                <CardHeader
+                  title="Audit History"
+                  subtitle="Latest period events"
+                  action={<History size={17} className="text-muted" />}
+                />
+                {selectedPeriod.auditHistory?.length ? (
+                  <div className="space-y-3">
+                    {selectedPeriod.auditHistory.map((entry) => (
+                      <div key={entry.id} className="border-b border-border pb-3 last:border-0 last:pb-0">
+                        <p className="text-sm font-medium capitalize text-ink">{auditLabel(entry)}</p>
+                        <p className="text-xs leading-5 text-muted">{auditDetail(entry)}</p>
+                        <p className="text-xs text-muted">
+                          {entry.actorEmail ?? 'System'} - {formatDateTime(entry.createdAt)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted">No audit events recorded yet.</p>
+                )}
+              </Card>
+            )}
+          </div>
+
+          {canViewReports && (
+            <Card padding="none">
+              <div className="flex flex-col gap-3 border-b border-border px-5 py-4 xl:flex-row xl:items-end xl:justify-between">
+                <CardHeader
+                  title="Reports and Export Center"
+                  subtitle={report ? `Generated ${formatDateTime(report.generatedAt)}` : 'Backend-approved payroll records and calculation snapshots'}
+                  className="mb-0"
+                />
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 xl:min-w-[680px]">
+                  <Input
+                    label="Employee Search"
+                    value={reportFilters.search}
+                    leftAddon={<Search size={14} />}
+                    onChange={(event) => setReportFilters((current) => ({ ...current, search: event.target.value }))}
+                    placeholder="Name or ID"
+                  />
+                  <Select
+                    label="Status"
+                    value={reportFilters.status}
+                    onChange={(event) => setReportFilters((current) => ({ ...current, status: event.target.value as 'all' | PayrollStatus }))}
+                  >
+                    <option value="all">All statuses</option>
+                    <option value="processed">Processed</option>
+                    <option value="approved">Approved</option>
+                    <option value="released">Released</option>
+                    <option value="locked">Locked</option>
+                  </Select>
+                  <Button
+                    className="self-end"
+                    variant="outline"
+                    leftIcon={<Download size={14} />}
+                    disabled={!canExportReports || isReportLoading || !report}
+                    isLoading={actionLoading === `export:${reportType}`}
+                    onClick={exportReport}
+                  >
+                    Export CSV
+                  </Button>
+                </div>
+              </div>
+
+              <div className="border-b border-border px-5 py-3">
+                <div className="flex flex-wrap gap-2">
+                  {reportTypes.map((item) => (
+                    <Button
+                      key={item.type}
+                      size="xs"
+                      variant={reportType === item.type ? 'primary' : 'outline'}
+                      onClick={() => setReportType(item.type)}
+                    >
+                      {item.label}
+                    </Button>
                   ))}
                 </div>
-              ) : (
-                <p className="text-sm text-muted">No audit events recorded yet.</p>
+              </div>
+
+              {report && (
+                <div className="grid grid-cols-1 gap-3 border-b border-border px-5 py-4 sm:grid-cols-2 lg:grid-cols-4">
+                  {Object.entries(report.totals)
+                    .filter(([key]) => /(pay|deduction|tax|share|contribution|income|amount|balance|gross|net|employee_count)/i.test(key))
+                    .slice(0, 4)
+                    .map(([key, value]) => (
+                      <div key={key} className="rounded-md border border-border px-3 py-2">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-muted">{prettyColumn(key)}</p>
+                        <p className="mt-1 text-sm font-semibold text-ink">
+                          {key === 'employee_count' ? Number(value).toLocaleString() : formatPeso(value)}
+                        </p>
+                      </div>
+                    ))}
+                </div>
               )}
+
+              <Table
+                data={report?.rows ?? []}
+                rowKey={(_row, index) => `${reportType}-${index}`}
+                isLoading={isReportLoading}
+                emptyMessage="No report rows match the selected filters."
+                columns={(report?.rows[0] ? Object.keys(report.rows[0]) : ['report'])
+                  .slice(0, 10)
+                  .map((key) => ({
+                    key,
+                    header: prettyColumn(key),
+                    render: (row: Record<string, unknown>) => (
+                      <span className="text-sm">{renderReportValue(key, row[key])}</span>
+                    ),
+                  }))}
+              />
             </Card>
-          </div>
+          )}
 
           <Card padding="none">
             <div className="flex flex-col gap-2 border-b border-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
@@ -710,12 +1121,47 @@ export default function PayrollPage() {
                 {
                   key: 'grossPay',
                   header: 'Gross',
-                  render: (record) => <span className="text-sm">{formatPeso(record.grossPay)}</span>,
+                  render: (record) => (
+                    <div>
+                      <p className="text-sm">{formatPeso(record.grossPay)}</p>
+                      <p className="text-xs text-muted">{formatPeso(record.taxableEarnings)} taxable</p>
+                    </div>
+                  ),
                 },
                 {
                   key: 'deductions',
                   header: 'Deductions',
-                  render: (record) => <span className="text-sm text-danger">{formatPeso(record.totalDeductions)}</span>,
+                  render: (record) => (
+                    <div>
+                      <p className="text-sm text-danger">{formatPeso(record.totalDeductions)}</p>
+                      <p className="text-xs text-muted">{formatPeso(record.statutoryDeductions)} statutory</p>
+                    </div>
+                  ),
+                },
+                {
+                  key: 'leaveLoan',
+                  header: 'Leave / Loans',
+                  render: (record) => (
+                    <div className="text-sm">
+                      <p className="text-danger">{formatPeso(record.leaveDeduction)} leave</p>
+                      <p className="text-muted">{formatPeso(record.loanDeductions)} loans</p>
+                    </div>
+                  ),
+                },
+                {
+                  key: 'tax',
+                  header: 'Tax',
+                  render: (record) => (
+                    <div>
+                      <p className="text-sm">{formatPeso(record.taxableIncome)}</p>
+                      <p className="text-xs text-danger">{formatPeso(record.withholdingTax)} withheld</p>
+                    </div>
+                  ),
+                },
+                {
+                  key: 'employer',
+                  header: 'Employer Share',
+                  render: (record) => <span className="text-sm">{formatPeso(record.employerContributions)}</span>,
                 },
                 {
                   key: 'netPay',
@@ -723,12 +1169,10 @@ export default function PayrollPage() {
                   render: (record) => <span className="text-sm font-semibold">{formatPeso(record.netPay)}</span>,
                 },
                 {
-                  key: 'offsets',
-                  header: 'Offsets',
+                  key: 'rules',
+                  header: 'Rule Version',
                   render: (record) => (
-                    <span className="text-sm">
-                      +{offsetHours(record.offsetEarnedMinutes)} / -{offsetHours(record.offsetUsedMinutes)}
-                    </span>
+                    <span className="block max-w-[220px] text-xs text-muted">{shortRuleVersion(record.statutoryRuleVersion)}</span>
                   ),
                 },
                 {
@@ -744,16 +1188,29 @@ export default function PayrollPage() {
                   key: 'payslip',
                   header: '',
                   render: (record) => (
-                    <Button
-                      size="xs"
-                      variant="ghost"
-                      leftIcon={<Download size={12} />}
-                      isLoading={downloadingRecordId === record.id}
-                      disabled={record.status !== 'released' || Boolean(downloadingRecordId)}
-                      onClick={() => downloadPayslip(record)}
-                    >
-                      Payslip
-                    </Button>
+                    <div className="flex items-center justify-end gap-2">
+                      {canViewAudit && (
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          leftIcon={<History size={12} />}
+                          isLoading={actionLoading === `snapshots:${record.id}`}
+                          onClick={() => viewSnapshots(record)}
+                        >
+                          Snapshots
+                        </Button>
+                      )}
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        leftIcon={<Download size={12} />}
+                        isLoading={downloadingRecordId === record.id}
+                        disabled={!['released', 'locked'].includes(record.status) || Boolean(downloadingRecordId)}
+                        onClick={() => downloadPayslip(record)}
+                      >
+                        Payslip
+                      </Button>
+                    </div>
                   ),
                 },
               ]}
@@ -815,7 +1272,7 @@ export default function PayrollPage() {
             <Button
               variant={confirmAction?.action === 'release' ? 'success' : 'primary'}
               leftIcon={<ShieldCheck size={14} />}
-              disabled={!canConfirmAction}
+              disabled={!canConfirmAction || (confirmAction?.action === 'approve' && hasCriticalValidationIssues)}
               isLoading={Boolean(actionKey && actionLoading === actionKey)}
               onClick={runConfirmedAction}
             >
@@ -830,6 +1287,31 @@ export default function PayrollPage() {
               This action changes payroll records for {confirmAction.period.recordCount ?? 0} employee
               {(confirmAction.period.recordCount ?? 0) === 1 ? '' : 's'} with a net total of {formatPeso(confirmAction.period.totalNetPay ?? 0)}.
             </div>
+            {confirmAction.action === 'release' && (
+              <FeedbackMessage variant="warning">
+                Release automatically locks this payroll period and its records. Normal recalculation, edits, and deletion will be blocked.
+              </FeedbackMessage>
+            )}
+            {confirmAction.action === 'approve' && hasCriticalValidationIssues && (
+              <FeedbackMessage variant="danger">
+                Fix Issues Before Approval. Run validation and complete the listed attendance, leave, salary, or payroll records first.
+              </FeedbackMessage>
+            )}
+            <Textarea
+              label={
+                confirmAction.action === 'approve'
+                  ? 'Approval notes'
+                  : confirmAction.action === 'correction'
+                    ? 'Correction notes'
+                    : confirmAction.action === 'process' && ((confirmAction.period.recordCount ?? 0) > 0 || confirmAction.period.status !== 'draft')
+                      ? 'Reprocessing reason'
+                      : 'Notes'
+              }
+              required={needsActionNotes}
+              value={confirmAction.notes}
+              onChange={(event) => setConfirmAction((current) => current ? { ...current, notes: event.target.value } : current)}
+              placeholder="Record the business reason or review notes"
+            />
             <Input
               label={`Type ${actionPhrase[confirmAction.action]} to confirm`}
               value={confirmAction.confirmation}
@@ -837,6 +1319,38 @@ export default function PayrollPage() {
               autoFocus
             />
           </div>
+        )}
+      </Modal>
+
+      <Modal
+        isOpen={Boolean(snapshotModal)}
+        onClose={() => setSnapshotModal(null)}
+        title="Calculation Snapshot History"
+        description={snapshotModal ? employeeName(snapshotModal.record) : undefined}
+        size="lg"
+        footer={<Button variant="outline" onClick={() => setSnapshotModal(null)}>Close</Button>}
+      >
+        {snapshotModal?.snapshots.length ? (
+          <div className="space-y-3">
+            {snapshotModal.snapshots.map((snapshot) => (
+              <div key={snapshot.id} className="rounded-md border border-border px-3 py-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-ink">Version {snapshot.snapshotVersion}</p>
+                    <p className="text-xs text-muted">{formatDateTime(snapshot.computedAt)} - {snapshot.formulaVersion}</p>
+                  </div>
+                  <Badge variant="neutral">{snapshot.snapshotHash.slice(0, 12)}</Badge>
+                </div>
+                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <p className="rounded-md bg-neutral-20 px-3 py-2 text-sm text-ink">Gross {formatPeso(snapshot.grossPay)}</p>
+                  <p className="rounded-md bg-neutral-20 px-3 py-2 text-sm text-ink">Deductions {formatPeso(snapshot.totalDeductions)}</p>
+                  <p className="rounded-md bg-neutral-20 px-3 py-2 text-sm font-semibold text-brand">Net {formatPeso(snapshot.netPay)}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-muted">No calculation snapshots are recorded for this payroll record.</p>
         )}
       </Modal>
     </div>

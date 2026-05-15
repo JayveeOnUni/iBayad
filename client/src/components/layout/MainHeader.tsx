@@ -9,6 +9,16 @@ interface MainHeaderProps {
   onMenuClick?: () => void
 }
 
+const fullAdminRoles = new Set(['admin', 'super_admin'])
+const payrollWorkspaceRoles = new Set(['payroll_preparer', 'payroll_approver', 'payroll_releaser', 'auditor'])
+
+function defaultPathForRole(role: string | undefined) {
+  if (role === 'employee') return '/employee/dashboard'
+  if (fullAdminRoles.has(role ?? '')) return '/admin/dashboard'
+  if (payrollWorkspaceRoles.has(role ?? '')) return '/admin/payroll'
+  return '/login'
+}
+
 export default function MainHeader({ onMenuClick }: MainHeaderProps) {
   const { user } = useAuthStore()
   const { logout } = useAuth()
@@ -55,7 +65,7 @@ export default function MainHeader({ onMenuClick }: MainHeaderProps) {
         <button
           type="button"
           className="rounded-md p-2 text-neutral-80 transition-colors hover:bg-neutral-20 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-200"
-          onClick={() => navigate(user?.role === 'employee' ? '/employee/dashboard' : '/admin/administration/announcements')}
+          onClick={() => navigate(fullAdminRoles.has(user?.role ?? '') ? '/admin/administration/announcements' : defaultPathForRole(user?.role))}
           aria-label="Open announcements"
         >
           <Bell size={16} />
@@ -87,7 +97,11 @@ export default function MainHeader({ onMenuClick }: MainHeaderProps) {
                 <button
                   onClick={() => {
                     setDropdownOpen(false)
-                    navigate(user?.role === 'employee' ? '/employee/profile' : '/admin/settings/general')
+                    navigate(fullAdminRoles.has(user?.role ?? '')
+                      ? '/admin/settings/general'
+                      : user?.role === 'employee'
+                        ? '/employee/profile'
+                        : defaultPathForRole(user?.role))
                   }}
                   className="block w-full px-4 py-2.5 text-left text-sm text-ink transition-colors hover:bg-neutral-20"
                 >

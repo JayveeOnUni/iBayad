@@ -12,6 +12,55 @@ type PgError = Error & {
   constraint?: string
   column?: string
   table?: string
+  detail?: string
+}
+
+type ValidationErrors = Record<string, string[]>
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const DEFAULT_WORK_DAYS_PER_MONTH = 22
+const DEFAULT_WORK_HOURS_PER_DAY = 8
+const GENDER_VALUES = ['male', 'female', 'other'] as const
+const CIVIL_STATUS_VALUES = ['single', 'married', 'widowed', 'separated'] as const
+const EMPLOYMENT_TYPE_VALUES = ['regular', 'probationary', 'contractual', 'part_time', 'intern'] as const
+const EMPLOYEE_STATUS_VALUES = ['active', 'inactive', 'terminated', 'resigned'] as const
+
+type GenderValue = typeof GENDER_VALUES[number]
+type CivilStatusValue = typeof CIVIL_STATUS_VALUES[number]
+type EmploymentTypeValue = typeof EMPLOYMENT_TYPE_VALUES[number]
+type EmployeeStatusValue = typeof EMPLOYEE_STATUS_VALUES[number]
+
+interface NormalizedEmployeeCreateInput {
+  firstName: string
+  middleName: string | null
+  lastName: string
+  email: string
+  phone: string | null
+  birthDate: string | null
+  gender: GenderValue | null
+  civilStatus: CivilStatusValue | null
+  address: string | null
+  city: string | null
+  province: string | null
+  zipCode: string | null
+  departmentId: string
+  positionId: string
+  shiftId: string | null
+  employmentType: EmploymentTypeValue
+  employeeStatus: EmployeeStatusValue
+  hireDate: string
+  basicSalary: number
+  dailyRate: number
+  hourlyRate: number
+  workDaysPerMonth: number
+  workHoursPerDay: number
+  sssNumber: string | null
+  philhealthNumber: string | null
+  pagibigNumber: string | null
+  tinNumber: string | null
+  bankName: string | null
+  bankAccountNumber: string | null
 }
 
 function positiveIntegerEnv(name: string, fallback: number, minimum: number): number {
@@ -22,6 +71,24 @@ function positiveIntegerEnv(name: string, fallback: number, minimum: number): nu
 
 const ACTIVATION_EXPIRES_HOURS = positiveIntegerEnv('ACCOUNT_ACTIVATION_EXPIRES_HOURS', 72, 1)
 
+function addFieldError(errors: ValidationErrors, field: string, message: string): void {
+  errors[field] = [...(errors[field] ?? []), message]
+}
+
+function hasValidationErrors(errors: ValidationErrors): boolean {
+  return Object.keys(errors).length > 0
+}
+
+function throwValidationError(errors: ValidationErrors): never {
+  const messages = Object.values(errors).flat()
+  const error = createError(
+    messages.length === 1 ? messages[0] : 'Please fix the highlighted employee fields and try again.',
+    400
+  )
+  error.details = errors
+  throw error
+}
+
 function emptyToNull(value: unknown): string | null {
   if (value == null) return null
   const trimmed = String(value).trim()
@@ -30,6 +97,143 @@ function emptyToNull(value: unknown): string | null {
 
 function emptyToNullIfPresent(value: unknown): string | null | undefined {
   return value === undefined ? undefined : emptyToNull(value)
+}
+
+function requiredText(value: unknown, field: string, label: string, errors: ValidationErrors): string {
+  const normalized = emptyToNull(value)
+  if (!normalized) {
+    addFieldError(errors, field, `${label} is required`)
+    return ''
+  }
+  return normalized
+}
+
+function optionalText(value: unknown): string | null {
+  return emptyToNull(value)
+}
+
+function isDateOnly(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (!match) return false
+
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const date = new Date(Date.UTC(year, month - 1, day))
+
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  )
+}
+
+function requiredDateValue(value: unknown, field: string, label: string, errors: ValidationErrors): string {
+  const normalized = emptyToNull(value)
+  if (!normalized) {
+    addFieldError(errors, field, `${label} is required`)
+    return ''
+  }
+  if (!isDateOnly(normalized)) {
+    addFieldError(errors, field, `${label} must be a valid date in YYYY-MM-DD format`)
+    return ''
+  }
+  return normalized
+}
+
+function optionalDateValue(value: unknown, field: string, label: string, errors: ValidationErrors): string | null {
+  const normalized = emptyToNull(value)
+  if (!normalized) return null
+  if (!isDateOnly(normalized)) {
+    addFieldError(errors, field, `${label} must be a valid date in YYYY-MM-DD format`)
+    return null
+  }
+  return normalized
+}
+
+function requiredUuid(value: unknown, field: string, label: string, errors: ValidationErrors): string {
+  const normalized = requiredText(value, field, label, errors)
+  if (normalized && !UUID_PATTERN.test(normalized)) {
+    addFieldError(errors, field, `${label} must be a valid UUID`)
+  }
+  return normalized
+}
+
+function optionalUuid(value: unknown, field: string, label: string, errors: ValidationErrors): string | null {
+  const normalized = emptyToNull(value)
+  if (!normalized) return null
+  if (!UUID_PATTERN.test(normalized)) {
+    addFieldError(errors, field, `${label} must be a valid UUID`)
+  }
+  return normalized
+}
+
+function normalizeEmail(value: unknown, errors: ValidationErrors): string {
+  const normalized = requiredText(value, 'email', 'Email', errors).toLowerCase()
+  if (normalized && !EMAIL_PATTERN.test(normalized)) {
+    addFieldError(errors, 'email', 'Email must be a valid email address')
+  }
+  return normalized
+}
+
+function optionalEnum<T extends string>(
+  value: unknown,
+  field: string,
+  label: string,
+  allowedValues: readonly T[],
+  errors: ValidationErrors
+): T | null {
+  const normalized = emptyToNull(value)
+  if (!normalized) return null
+  if (!allowedValues.includes(normalized as T)) {
+    addFieldError(errors, field, `${label} must be one of: ${allowedValues.join(', ')}`)
+    return null
+  }
+  return normalized as T
+}
+
+function optionalPositiveNumber(value: unknown, field: string, label: string, errors: ValidationErrors): number | null {
+  if (value === undefined || value === null || value === '') return null
+
+  const number = Number(value)
+  if (!Number.isFinite(number)) {
+    addFieldError(errors, field, `${label} must be a valid number`)
+    return null
+  }
+  if (number <= 0) {
+    addFieldError(errors, field, `${label} must be greater than 0`)
+    return null
+  }
+  return number
+}
+
+function optionalPositiveInteger(value: unknown, field: string, label: string, errors: ValidationErrors): number | null {
+  const number = optionalPositiveNumber(value, field, label, errors)
+  if (number != null && !Number.isInteger(number)) {
+    addFieldError(errors, field, `${label} must be a whole number`)
+    return null
+  }
+  return number
+}
+
+function requiredPositiveNumber(value: unknown, field: string, label: string, errors: ValidationErrors): number {
+  const number = optionalPositiveNumber(value, field, label, errors)
+  if (number == null && (value === undefined || value === null || value === '')) {
+    addFieldError(errors, field, `${label} is required`)
+  }
+  return number ?? 0
+}
+
+function optionalGovernmentIdValue(value: unknown, field: string, label: string, errors: ValidationErrors): string | null {
+  const normalized = emptyToNull(value)
+  if (!normalized) return null
+  if (normalized.length > 30) {
+    addFieldError(errors, field, `${label} must be 30 characters or fewer`)
+  }
+  if (!/^[0-9 -]+$/.test(normalized)) {
+    addFieldError(errors, field, `${label} must contain only numbers, spaces, or hyphens`)
+  }
+  return normalized
 }
 
 function optionalGovernmentId(value: unknown, fieldName: string): string | null {
@@ -49,13 +253,198 @@ function optionalGovernmentIdIfPresent(value: unknown, fieldName: string): strin
 function requiredDate(value: unknown, fieldName: string): string {
   const date = emptyToNull(value)
   if (!date) throw createError(`${fieldName} is required`, 400)
+  if (!isDateOnly(date)) throw createError(`${fieldName} must be a valid date in YYYY-MM-DD format`, 400)
   return date
 }
 
-function optionalNumber(value: unknown): number | null {
-  if (value === '' || value == null) return null
-  const number = Number(value)
-  return Number.isFinite(number) ? number : null
+function roundRate(value: number): number {
+  return Math.round(value * 10000) / 10000
+}
+
+function calculateRates(monthlySalary: number, workDaysPerMonth: number, workHoursPerDay: number) {
+  // The employee rate is derived from the saved work schedule. Explicit employee
+  // values win, then selected shift hours, then system defaults, with a final
+  // conservative fallback only when no configuration exists.
+  const dailyRate = monthlySalary / workDaysPerMonth
+  const hourlyRate = dailyRate / workHoursPerDay
+  return {
+    dailyRate: roundRate(dailyRate),
+    hourlyRate: roundRate(hourlyRate),
+  }
+}
+
+function numberFromSetting(value: unknown): number | null {
+  if (value == null) return null
+  const normalized = typeof value === 'object' && 'value' in value ? (value as { value?: unknown }).value : value
+  const number = Number(normalized)
+  return Number.isFinite(number) && number > 0 ? number : null
+}
+
+async function getRateDefaults(): Promise<{ workDaysPerMonth: number; workHoursPerDay: number }> {
+  const result = await pool.query(
+    `SELECT key, value
+     FROM system_settings
+     WHERE key IN ('work_days_per_month', 'work_hours_per_day')`
+  )
+
+  const settings = new Map<string, unknown>(result.rows.map((row) => [String(row.key), row.value]))
+
+  return {
+    workDaysPerMonth: numberFromSetting(settings.get('work_days_per_month')) ?? DEFAULT_WORK_DAYS_PER_MONTH,
+    workHoursPerDay: numberFromSetting(settings.get('work_hours_per_day')) ?? DEFAULT_WORK_HOURS_PER_DAY,
+  }
+}
+
+async function assertNoDuplicateEmployeeEmail(email: string): Promise<void> {
+  const result = await pool.query(
+    `SELECT
+       EXISTS (SELECT 1 FROM employees WHERE LOWER(email) = LOWER($1)) AS employee_exists,
+       EXISTS (SELECT 1 FROM users WHERE LOWER(email) = LOWER($1)) AS user_exists`,
+    [email]
+  )
+
+  if (result.rows[0]?.employee_exists || result.rows[0]?.user_exists) {
+    throw createError('An employee or user account with that email already exists.', 409)
+  }
+}
+
+async function validateEmployeeReferences(input: {
+  departmentId: string
+  positionId: string
+  shiftId: string | null
+}): Promise<{ shiftWorkHours: number | null }> {
+  const errors: ValidationErrors = {}
+
+  const [departmentResult, positionResult, shiftResult] = await Promise.all([
+    pool.query('SELECT id FROM departments WHERE id = $1 AND is_active = true', [input.departmentId]),
+    pool.query('SELECT id, department_id FROM positions WHERE id = $1 AND is_active = true', [input.positionId]),
+    input.shiftId
+      ? pool.query('SELECT id, work_hours FROM work_shifts WHERE id = $1 AND is_active = true', [input.shiftId])
+      : Promise.resolve({ rows: [] as Array<{ work_hours?: unknown }> }),
+  ])
+
+  if (!departmentResult.rows[0]) {
+    addFieldError(errors, 'departmentId', 'Department must reference an active department')
+  }
+
+  const position = positionResult.rows[0] as { department_id?: string | null } | undefined
+  if (!position) {
+    addFieldError(errors, 'positionId', 'Position must reference an active position')
+  } else if (position.department_id && String(position.department_id) !== input.departmentId) {
+    addFieldError(errors, 'positionId', 'Position must belong to the selected department')
+  }
+
+  const shift = shiftResult.rows[0] as { work_hours?: unknown } | undefined
+  if (input.shiftId && !shift) {
+    addFieldError(errors, 'shiftId', 'Shift must reference an active shift')
+  }
+
+  if (hasValidationErrors(errors)) throwValidationError(errors)
+
+  return {
+    shiftWorkHours: shift ? numberFromSetting(shift.work_hours) : null,
+  }
+}
+
+async function normalizeCreateEmployeeInput(body: Record<string, unknown>): Promise<NormalizedEmployeeCreateInput> {
+  const errors: ValidationErrors = {}
+  const salaryInput = body.basicSalary === undefined ? body.monthlySalary : body.basicSalary
+
+  const firstName = requiredText(body.firstName, 'firstName', 'First name', errors)
+  const lastName = requiredText(body.lastName, 'lastName', 'Last name', errors)
+  const email = normalizeEmail(body.email, errors)
+  const departmentId = requiredUuid(body.departmentId, 'departmentId', 'Department', errors)
+  const positionId = requiredUuid(body.positionId, 'positionId', 'Position', errors)
+  const shiftId = optionalUuid(body.shiftId, 'shiftId', 'Shift', errors)
+  const hireDate = requiredDateValue(body.hireDate, 'hireDate', 'Hire date', errors)
+  const basicSalary = requiredPositiveNumber(salaryInput, 'basicSalary', 'Monthly salary', errors)
+  const workDaysPerMonth = optionalPositiveInteger(
+    body.workDaysPerMonth ?? body.work_days_per_month,
+    'workDaysPerMonth',
+    'Work days per month',
+    errors
+  )
+  const providedWorkHoursPerDay = optionalPositiveNumber(
+    body.workHoursPerDay ?? body.work_hours_per_day,
+    'workHoursPerDay',
+    'Work hours per day',
+    errors
+  )
+  const gender = optionalEnum(body.gender, 'gender', 'Gender', GENDER_VALUES, errors)
+  const civilStatus = optionalEnum(body.civilStatus, 'civilStatus', 'Civil status', CIVIL_STATUS_VALUES, errors)
+  const employmentType = optionalEnum(
+    body.employmentType,
+    'employmentType',
+    'Employment type',
+    EMPLOYMENT_TYPE_VALUES,
+    errors
+  ) ?? 'regular'
+  const employeeStatus = optionalEnum(
+    body.employeeStatus ?? body.employmentStatus,
+    'employeeStatus',
+    'Employee status',
+    EMPLOYEE_STATUS_VALUES,
+    errors
+  ) ?? 'active'
+
+  const normalized = {
+    firstName,
+    middleName: optionalText(body.middleName),
+    lastName,
+    email,
+    phone: optionalText(body.phone),
+    birthDate: optionalDateValue(body.birthDate, 'birthDate', 'Birth date', errors),
+    gender,
+    civilStatus,
+    address: optionalText(body.address),
+    city: optionalText(body.city),
+    province: optionalText(body.province),
+    zipCode: optionalText(body.zipCode),
+    departmentId,
+    positionId,
+    shiftId,
+    employmentType,
+    employeeStatus,
+    hireDate,
+    basicSalary,
+    workDaysPerMonth,
+    providedWorkHoursPerDay,
+    sssNumber: optionalGovernmentIdValue(body.sssNumber, 'sssNumber', 'SSS Number', errors),
+    philhealthNumber: optionalGovernmentIdValue(body.philhealthNumber, 'philhealthNumber', 'PhilHealth Number', errors),
+    pagibigNumber: optionalGovernmentIdValue(body.pagibigNumber, 'pagibigNumber', 'Pag-IBIG Number', errors),
+    tinNumber: optionalGovernmentIdValue(body.tinNumber, 'tinNumber', 'TIN Number', errors),
+    bankName: optionalText(body.bankName),
+    bankAccountNumber: optionalText(body.bankAccountNumber),
+  }
+
+  if (hasValidationErrors(errors)) throwValidationError(errors)
+
+  const [{ shiftWorkHours }, rateDefaults] = await Promise.all([
+    validateEmployeeReferences({ departmentId, positionId, shiftId }),
+    getRateDefaults(),
+  ])
+  await assertNoDuplicateEmployeeEmail(email)
+
+  const finalWorkDaysPerMonth = workDaysPerMonth ?? rateDefaults.workDaysPerMonth
+  const finalWorkHoursPerDay = providedWorkHoursPerDay ?? shiftWorkHours ?? rateDefaults.workHoursPerDay
+
+  if (!Number.isFinite(finalWorkDaysPerMonth) || finalWorkDaysPerMonth <= 0) {
+    addFieldError(errors, 'workDaysPerMonth', 'Work days per month must be greater than 0')
+  }
+  if (!Number.isFinite(finalWorkHoursPerDay) || finalWorkHoursPerDay <= 0) {
+    addFieldError(errors, 'workHoursPerDay', 'Work hours per day must be greater than 0')
+  }
+  if (hasValidationErrors(errors)) throwValidationError(errors)
+
+  const rates = calculateRates(basicSalary, finalWorkDaysPerMonth, finalWorkHoursPerDay)
+
+  return {
+    ...normalized,
+    workDaysPerMonth: finalWorkDaysPerMonth,
+    workHoursPerDay: finalWorkHoursPerDay,
+    dailyRate: rates.dailyRate,
+    hourlyRate: rates.hourlyRate,
+  }
 }
 
 function isEmployeeNumberDuplicateError(error: unknown): boolean {
@@ -81,19 +470,65 @@ function isDuplicateEmailError(error: unknown): boolean {
   )
 }
 
+function isDuplicateEmployeeNumberError(error: unknown): boolean {
+  return (
+    isPgError(error) &&
+    error.code === '23505' &&
+    error.constraint === 'employees_employee_number_key'
+  )
+}
+
 function toEmployeeWriteError(error: unknown): Error {
   if (isDuplicateEmailError(error)) {
     return createError('An employee or user account with that email already exists.', 409)
   }
 
-  if (isPgError(error) && error.code === '42703') {
-    logger.error('Employee creation failed because the database schema is out of date', {
-      code: error.code,
-      column: error.column,
-      table: error.table,
-      constraint: error.constraint,
-    })
-    return createError('Database schema is out of date. Please run the latest migrations and try again.', 500)
+  if (isDuplicateEmployeeNumberError(error)) {
+    return createError('An employee with that employee number already exists. Please try again.', 409)
+  }
+
+  if (isPgError(error)) {
+    if (error.code === '22P02') {
+      if (error.message.includes('uuid')) {
+        return createError('One of the submitted IDs is not a valid UUID.', 400)
+      }
+      if (error.message.includes('enum')) {
+        return createError('One of the submitted employee option values is invalid.', 400)
+      }
+      return createError('One of the submitted employee values is invalid.', 400)
+    }
+
+    if (error.code === '22007' || error.code === '22008') {
+      return createError('One of the submitted dates is invalid.', 400)
+    }
+
+    if (error.code === '23503') {
+      const constraint = error.constraint ?? ''
+      if (constraint.includes('department_id')) {
+        return createError('Department must reference an existing department.', 400)
+      }
+      if (constraint.includes('position_id')) {
+        return createError('Position must reference an existing position.', 400)
+      }
+      if (constraint.includes('shift_id')) {
+        return createError('Shift must reference an existing shift.', 400)
+      }
+      return createError('One of the submitted employee references does not exist.', 400)
+    }
+
+    if (error.code === '23505') {
+      return createError('A duplicate employee record already exists.', 409)
+    }
+
+    if (error.code === '42703') {
+      logger.error('Employee creation failed because the database schema is out of date', {
+        code: error.code,
+        column: error.column,
+        table: error.table,
+        constraint: error.constraint,
+      })
+      return createError('Database schema is out of date. Please run the latest migrations and try again.', 500)
+    }
   }
 
   return error instanceof Error ? error : createError('Unable to create employee account', 500)
@@ -218,24 +653,7 @@ export const getEmployee = asyncHandler(async (req: Request, res: Response) => {
 })
 
 export const createEmployee = asyncHandler(async (req: Request, res: Response) => {
-  const {
-    firstName, middleName, lastName, email, phone,
-    birthDate, gender, civilStatus,
-    address, city, province, zipCode,
-    departmentId, positionId, employmentType, hireDate,
-    basicSalary, sssNumber, philhealthNumber, pagibigNumber, tinNumber,
-    bankName, bankAccountNumber, shiftId,
-  } = req.body
-
-  const salary = optionalNumber(basicSalary)
-  const normalizedHireDate = requiredDate(hireDate, 'hireDate')
-
-  if (!firstName || !lastName || !email || salary == null) {
-    throw createError('firstName, lastName, email, hireDate, and basicSalary are required', 400)
-  }
-
-  const dailyRate = salary / 22
-  const hourlyRate = dailyRate / 8
+  const input = await normalizeCreateEmployeeInput(req.body as Record<string, unknown>)
 
   const client = await pool.connect()
   let employee: EmployeeRow | undefined
@@ -254,32 +672,35 @@ export const createEmployee = asyncHandler(async (req: Request, res: Response) =
         await client.query('SAVEPOINT employee_number_attempt')
         employee = await EmployeeModel.create({
           employee_number: employeeNumber,
-          first_name: emptyToNull(firstName) ?? '',
-          middle_name: emptyToNull(middleName),
-          last_name: emptyToNull(lastName) ?? '',
-          email: emptyToNull(email) ?? '',
-          phone: emptyToNull(phone),
-          birth_date: emptyToNull(birthDate),
-          gender,
-          civil_status: civilStatus,
-          address: emptyToNull(address),
-          city: emptyToNull(city),
-          province: emptyToNull(province),
-          zip_code: emptyToNull(zipCode),
-          department_id: emptyToNull(departmentId),
-          position_id: emptyToNull(positionId),
-          employment_type: employmentType || 'regular',
-          hire_date: normalizedHireDate,
-          basic_salary: salary,
-          daily_rate: Math.round(dailyRate * 100) / 100,
-          hourly_rate: Math.round(hourlyRate * 100) / 100,
-          sss_number: optionalGovernmentId(sssNumber, 'SSS Number'),
-          philhealth_number: optionalGovernmentId(philhealthNumber, 'PhilHealth Number'),
-          pagibig_number: optionalGovernmentId(pagibigNumber, 'Pag-IBIG Number'),
-          tin_number: optionalGovernmentId(tinNumber, 'TIN Number'),
-          bank_name: emptyToNull(bankName),
-          bank_account_number: emptyToNull(bankAccountNumber),
-          shift_id: emptyToNull(shiftId),
+          first_name: input.firstName,
+          middle_name: input.middleName,
+          last_name: input.lastName,
+          email: input.email,
+          phone: input.phone,
+          birth_date: input.birthDate,
+          gender: input.gender,
+          civil_status: input.civilStatus,
+          address: input.address,
+          city: input.city,
+          province: input.province,
+          zip_code: input.zipCode,
+          department_id: input.departmentId,
+          position_id: input.positionId,
+          shift_id: input.shiftId,
+          employment_type: input.employmentType,
+          employment_status: input.employeeStatus,
+          hire_date: input.hireDate,
+          basic_salary: input.basicSalary,
+          daily_rate: input.dailyRate,
+          hourly_rate: input.hourlyRate,
+          work_days_per_month: input.workDaysPerMonth,
+          work_hours_per_day: input.workHoursPerDay,
+          sss_number: input.sssNumber,
+          philhealth_number: input.philhealthNumber,
+          pagibig_number: input.pagibigNumber,
+          tin_number: input.tinNumber,
+          bank_name: input.bankName,
+          bank_account_number: input.bankAccountNumber,
         }, client)
         await client.query('RELEASE SAVEPOINT employee_number_attempt')
         break

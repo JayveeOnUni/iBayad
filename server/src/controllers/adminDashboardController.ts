@@ -65,7 +65,7 @@ export const getAdminDashboard = asyncHandler(async (_req: Request, res: Respons
   const currentPeriodResult = await pool.query(
     `SELECT pp.*,
             COUNT(pr.id) AS record_count,
-            COUNT(pr.id) FILTER (WHERE pr.status IN ('processing', 'approved', 'released')) AS processed_record_count,
+            COUNT(pr.id) FILTER (WHERE pr.status IN ('processing', 'processed', 'validation_failed', 'ready_for_approval', 'needs_correction', 'approved', 'released', 'locked')) AS processed_record_count,
             COALESCE(SUM(pr.gross_pay), 0) AS total_gross_pay,
             COALESCE(SUM(pr.net_pay), 0) AS total_net_pay
      FROM payroll_periods pp
@@ -166,7 +166,7 @@ export const getAdminDashboard = asyncHandler(async (_req: Request, res: Respons
       `SELECT
          (SELECT COUNT(*) FROM leave_requests WHERE status = 'pending') AS pending_leave_requests,
          (SELECT COUNT(*) FROM attendance_requests WHERE status = 'pending') AS pending_attendance_requests,
-         (SELECT COUNT(*) FROM payroll_periods WHERE status = 'processing') AS payroll_periods_for_approval`
+         (SELECT COUNT(*) FROM payroll_periods WHERE status = 'ready_for_approval') AS payroll_periods_for_approval`
     ),
     pool.query(
       `WITH approved_leave_today AS (
@@ -238,7 +238,7 @@ export const getAdminDashboard = asyncHandler(async (_req: Request, res: Respons
     pool.query(
       `SELECT id, name, start_date, end_date, pay_date, status, updated_at
        FROM payroll_periods
-       WHERE status = 'processing'
+       WHERE status = 'ready_for_approval'
        ORDER BY pay_date ASC, updated_at ASC
        LIMIT 3`
     ),

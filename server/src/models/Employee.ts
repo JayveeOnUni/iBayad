@@ -29,6 +29,8 @@ export interface EmployeeRow {
   basic_salary: number
   daily_rate: number
   hourly_rate: number
+  work_days_per_month?: number
+  work_hours_per_day?: number
   sss_number?: Nullable<string>
   philhealth_number?: Nullable<string>
   pagibig_number?: Nullable<string>
@@ -123,25 +125,26 @@ export class EmployeeModel {
       `INSERT INTO employees (
         employee_number, first_name, middle_name, last_name, email, phone,
         birth_date, gender, civil_status, address, city, province, zip_code,
-        department_id, position_id, employment_type, hire_date,
-        basic_salary, daily_rate, hourly_rate,
+        department_id, position_id, employment_type, employment_status, hire_date,
+        basic_salary, daily_rate, hourly_rate, work_days_per_month, work_hours_per_day,
         sss_number, philhealth_number, pagibig_number, tin_number,
         bank_name, bank_account_number, shift_id
       ) VALUES (
         $1, $2, $3, $4, $5, $6,
         $7, $8, $9, $10, $11, $12, $13,
-        $14, $15, $16, $17,
-        $18, $19, $20,
-        $21, $22, $23, $24,
-        $25, $26, $27
+        $14, $15, $16, $17, $18,
+        $19, $20, $21, $22, $23,
+        $24, $25, $26, $27,
+        $28, $29, $30
       ) RETURNING *`,
       [
         data.employee_number, data.first_name, data.middle_name, data.last_name,
         data.email, data.phone,
         data.birth_date, data.gender, data.civil_status,
         data.address, data.city, data.province, data.zip_code,
-        data.department_id, data.position_id, data.employment_type, data.hire_date,
+        data.department_id, data.position_id, data.employment_type, data.employment_status, data.hire_date,
         data.basic_salary, data.daily_rate, data.hourly_rate,
+        data.work_days_per_month, data.work_hours_per_day,
         data.sss_number, data.philhealth_number, data.pagibig_number, data.tin_number,
         data.bank_name, data.bank_account_number, data.shift_id,
       ]

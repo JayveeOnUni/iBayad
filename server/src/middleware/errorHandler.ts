@@ -6,6 +6,7 @@ export interface AppError extends Error {
   isOperational?: boolean
   code?: string
   constraint?: string
+  details?: unknown
 }
 
 function toOperationalDatabaseError(err: AppError): AppError {
@@ -53,6 +54,7 @@ export function errorHandler(
   res.status(statusCode).json({
     success: false,
     message,
+    ...(normalizedError.details ? { details: normalizedError.details } : {}),
     ...(process.env.NODE_ENV === 'development' && {
       stack: normalizedError.stack,
     }),

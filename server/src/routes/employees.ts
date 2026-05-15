@@ -9,6 +9,11 @@ import {
   resendEmployeeActivation,
 } from '../controllers/employeeController'
 import { getEmployeeDashboard } from '../controllers/employeeDashboardController'
+import {
+  downloadPayslipPdf,
+  getMyPayrollRecords,
+  getPayrollRecordPayslip,
+} from '../controllers/payrollController'
 import { authenticate, employeeSelfService, requireRole } from '../middleware/auth'
 import { asyncHandler, createError } from '../middleware/errorHandler'
 import pool from '../utils/db'
@@ -32,6 +37,9 @@ router.get('/me', employeeSelfService, asyncHandler(async (req, res) => {
 }))
 
 router.get('/dashboard', employeeSelfService, getEmployeeDashboard)
+router.get('/me/payslips', employeeSelfService, getMyPayrollRecords)
+router.get('/me/payslips/:id', employeeSelfService, getPayrollRecordPayslip)
+router.get('/me/payslips/:id/pdf', employeeSelfService, downloadPayslipPdf)
 
 // Admin routes
 router.get('/', requireRole('admin'), listEmployees)

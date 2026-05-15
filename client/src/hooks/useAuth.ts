@@ -4,6 +4,16 @@ import { useAuthStore } from '../store/authStore'
 import { authService } from '../services/authService'
 import type { LoginCredentials } from '../types'
 
+const fullAdminRoles = new Set(['admin', 'super_admin'])
+const payrollWorkspaceRoles = new Set(['payroll_preparer', 'payroll_approver', 'payroll_releaser', 'auditor'])
+
+function defaultPathForRole(role: string | undefined) {
+  if (role === 'employee') return '/employee/dashboard'
+  if (fullAdminRoles.has(role ?? '')) return '/admin/dashboard'
+  if (payrollWorkspaceRoles.has(role ?? '')) return '/admin/payroll'
+  return '/login'
+}
+
 export function useAuth() {
   const { user, isAuthenticated, isLoading, setAuth, logout: clearAuth, setLoading } = useAuthStore()
   const navigate = useNavigate()
@@ -15,11 +25,7 @@ export function useAuth() {
       setLoading(true)
       const response = await authService.login(credentials)
       setAuth(response.user, response.tokens)
-      if (response.user.role === 'employee') {
-        navigate('/employee/dashboard')
-      } else {
-        navigate('/admin/dashboard')
-      }
+      navigate(defaultPathForRole(response.user.role))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed. Please try again.')
     } finally {
@@ -49,7 +55,7 @@ export function useAuth() {
     }
   }
 
-  const isAdmin = user?.role === 'admin'
+  const isAdmin = fullAdminRoles.has(user?.role ?? '')
 
   return {
     user,

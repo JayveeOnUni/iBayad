@@ -102,8 +102,28 @@ SELECT 'Regular Shift', '08:00', '17:00', 60, 8, true
 WHERE NOT EXISTS (SELECT 1 FROM work_shifts WHERE name = 'Regular Shift');
 
 INSERT INTO work_shifts (name, start_time, end_time, break_minutes, work_hours, is_active)
-SELECT 'Mid Shift', '09:00', '18:00', 60, 8, true
+SELECT 'Mid Shift', '09:00', '18:00', 60, 8, false
 WHERE NOT EXISTS (SELECT 1 FROM work_shifts WHERE name = 'Mid Shift');
+
+INSERT INTO work_shifts (name, start_time, end_time, break_minutes, work_hours, is_active)
+SELECT 'Graveyard Shift', '22:00', '07:00', 60, 8, false
+WHERE NOT EXISTS (SELECT 1 FROM work_shifts WHERE name = 'Graveyard Shift');
+
+UPDATE work_shifts
+SET start_time = '09:00',
+    end_time = '18:00',
+    break_minutes = 60,
+    work_hours = 8,
+    is_active = false
+WHERE name = 'Mid Shift';
+
+UPDATE work_shifts
+SET start_time = '22:00',
+    end_time = '07:00',
+    break_minutes = 60,
+    work_hours = 8,
+    is_active = false
+WHERE name = 'Graveyard Shift';
 
 UPDATE work_shifts
 SET is_active = false

@@ -1,6 +1,6 @@
 // ─── Auth & Users ────────────────────────────────────────────────────────────
 
-export type UserRole = 'admin' | 'employee'
+export type UserRole = 'admin' | 'employee' | 'payroll_preparer' | 'payroll_approver' | 'payroll_releaser' | 'auditor' | 'super_admin'
 
 export interface User {
   id: string
@@ -105,6 +105,8 @@ export interface Employee {
   basicSalary: number
   dailyRate: number
   hourlyRate: number
+  workDaysPerMonth?: number
+  workHoursPerDay?: number
 
   // Banking
   bankName?: string
@@ -129,6 +131,7 @@ export interface Shift {
   breakMinutes: number
   workingHoursPerDay: number
   isNightShift: boolean
+  isActive?: boolean
   createdAt: string
   updatedAt: string
 }
@@ -322,13 +325,90 @@ export interface Holiday {
 // ─── Payroll ──────────────────────────────────────────────────────────────────
 
 export type PayFrequency = 'weekly' | 'semi-monthly' | 'monthly'
-export type PayrollStatus = 'draft' | 'processing' | 'approved' | 'released' | 'cancelled'
+export type PayrollStatus =
+  | 'draft'
+  | 'processing'
+  | 'processed'
+  | 'validation_failed'
+  | 'ready_for_approval'
+  | 'needs_correction'
+  | 'approved'
+  | 'released'
+  | 'locked'
+  | 'cancelled'
 
 export interface PayrollWarning {
   code: string
   severity: 'info' | 'warning' | 'danger'
   message: string
   count?: number
+}
+
+export interface PayrollValidationEmployeeIssue {
+  employeeId: string
+  employeeNumber: string
+  employeeName: string
+  count?: number
+  dates?: string[]
+  amount?: number
+}
+
+export interface PayrollValidationIssue {
+  code: string
+  severity: 'critical' | 'warning'
+  message: string
+  count?: number
+}
+
+export interface PayrollValidationReport {
+  periodId: string
+  status: PayrollStatus
+  isValid: boolean
+  criticalIssueCount: number
+  warningCount: number
+  message: string
+  issues: PayrollValidationIssue[]
+  attendance: {
+    totalEmployees: number
+    expectedWorkdays: number
+    expectedEmployeeDays: number
+    completeEmployees: number
+    employeesWithMissingAttendance: number
+    missingEmployeeDays: number
+    pendingCorrections: number
+    missingAttendance: PayrollValidationEmployeeIssue[]
+  }
+  payroll: {
+    employeesWithPayrollRecords: number
+    employeesWithoutPayrollRecords: number
+    employeesWithMissingSalarySetup: number
+    employeesWithNegativeNetPay: number
+    employeesWithIncompleteBreakdown: number
+    employeesWithInconsistentTotals: number
+    employeesWithInvalidTaxableIncome: number
+    missingPayrollRecords: PayrollValidationEmployeeIssue[]
+    missingSalarySetup: PayrollValidationEmployeeIssue[]
+    negativeNetPay: PayrollValidationEmployeeIssue[]
+    incompleteBreakdown: PayrollValidationEmployeeIssue[]
+    inconsistentTotals: PayrollValidationEmployeeIssue[]
+    invalidTaxableIncome: PayrollValidationEmployeeIssue[]
+  }
+  leaveAdjustments: {
+    pendingLeaveRequests: number
+    unappliedLeaveAdjustments: number
+    unpaidLeaveRecords: number
+  }
+  statutory: {
+    isComplete: boolean
+    versions: Record<string, unknown>
+    missingRules: Array<{ agency: string; ruleName: string }>
+  }
+  loans: {
+    duplicateLoanDeductions: number
+    deductionsExceedingBalance: number
+    duplicateDeductions: PayrollValidationEmployeeIssue[]
+    exceedingBalance: PayrollValidationEmployeeIssue[]
+  }
 }
 
 export interface PayrollAuditEntry {
@@ -339,6 +419,32 @@ export interface PayrollAuditEntry {
   actorEmail?: string
   oldValues?: unknown
   newValues?: unknown
+  reason?: string
+  createdAt: string
+}
+
+export interface PayrollCalculationSnapshot {
+  id: string
+  payrollRecordId: string
+  payrollPeriodId: string
+  employeeId: string
+  snapshotVersion: number
+  formulaVersion: string
+  payrollFrequency?: PayFrequency
+  payrollPeriodStart: string
+  payrollPeriodEnd: string
+  attendanceSummary: Record<string, unknown>
+  earningsBreakdown: Record<string, unknown>
+  deductionsBreakdown: Record<string, unknown>
+  employerContributions: Record<string, unknown>
+  taxableIncome: number
+  nonTaxableEarnings: number
+  grossPay: number
+  totalDeductions: number
+  netPay: number
+  computedBy?: string
+  computedAt: string
+  snapshotHash: string
   createdAt: string
 }
 
@@ -354,6 +460,19 @@ export interface PayrollPeriod {
   updatedAt: string
   approvedBy?: string
   approvedAt?: string
+  createdBy?: string
+  processedBy?: string
+  validatedBy?: string
+  releasedBy?: string
+  lockedBy?: string
+  processedAt?: string
+  validatedAt?: string
+  releasedAt?: string
+  lockedAt?: string
+  approvalNotes?: string
+  correctionNotes?: string
+  isLocked?: boolean
+  lockedReason?: string
   activeEmployeeCount?: number
   recordCount?: number
   processingRecordCount?: number
@@ -402,6 +521,9 @@ export interface PayrollRecord {
   thirteenthMonthPay: number
   allowances: number
   otherEarnings: number
+  taxableEarnings: number
+  nonTaxableEarnings: number
+  paidLeaveAmount: number
   grossPay: number
   excessMinutes: number
   offsetEarnedMinutes: number
@@ -414,12 +536,22 @@ export interface PayrollRecord {
   withholdingTax: number
   absenceDeduction: number
   lateDeduction: number
+  undertimeDeduction: number
+  leaveDeduction: number
+  taxableIncome: number
+  preTaxDeductions: number
+  statutoryDeductions: number
+  postTaxDeductions: number
   loanDeductions: number
   otherDeductions: number
   totalDeductions: number
 
   // Net
   netPay: number
+  employerContributions: number
+  statutoryRuleVersion?: string
+  statutoryRuleVersions?: Record<string, unknown>
+  computationBreakdown?: Record<string, unknown>
 
   // Meta
   daysWorked: number
@@ -432,8 +564,65 @@ export interface PayrollRecord {
   remarks?: string
   processedBy?: string
   processedAt?: string
+  currentSnapshotId?: string
+  isLocked?: boolean
+  lockedAt?: string
+  lockedBy?: string
   createdAt: string
   updatedAt: string
+}
+
+export type PayrollReportType =
+  | 'summary'
+  | 'employees'
+  | 'government-contributions'
+  | 'tax'
+  | 'loans'
+  | 'attendance'
+
+export interface PayrollReport {
+  reportType: PayrollReportType
+  period: Record<string, unknown>
+  generatedAt: string
+  filters: Record<string, string>
+  totals: Record<string, number>
+  rows: Array<Record<string, unknown>>
+}
+
+export interface PayslipDetail {
+  company: {
+    name: string
+    address: string
+    contact: string
+  }
+  referenceNumber: string
+  generatedAt: string
+  period: {
+    id: string
+    name: string
+    startDate: string
+    endDate: string
+    payDate: string
+    frequency: PayFrequency
+    status: PayrollStatus
+    isLocked: boolean
+  }
+  employee: {
+    id: string
+    name: string
+    employeeNumber: string
+    department?: string
+    position?: string
+    employmentType?: string
+  }
+  earnings: Record<string, number>
+  attendance: Record<string, number>
+  deductions: Record<string, number>
+  employerContributions: Record<string, number>
+  summary: Record<string, number | string>
+  metadata: Record<string, unknown>
+  loanDeductions: Array<Record<string, unknown>>
+  leaveAdjustments: Array<Record<string, unknown>>
 }
 
 // ─── Loan ─────────────────────────────────────────────────────────────────────
@@ -471,25 +660,6 @@ export interface Announcement {
   expiresAt?: string
   isPublished: boolean
   createdBy: string
-  createdAt: string
-  updatedAt: string
-}
-
-// ─── Role & Permissions ───────────────────────────────────────────────────────
-
-export interface Permission {
-  id: string
-  module: string
-  action: 'read' | 'create' | 'update' | 'delete'
-  description: string
-}
-
-export interface Role {
-  id: string
-  name: string
-  description: string
-  permissions: Permission[]
-  isSystem: boolean
   createdAt: string
   updatedAt: string
 }
@@ -758,6 +928,8 @@ export interface EmployeeFormData {
   employmentType: EmploymentType
   hireDate: string
   basicSalary: number
+  workDaysPerMonth: number
+  workHoursPerDay: number
   sssNumber?: string
   philhealthNumber?: string
   pagibigNumber?: string

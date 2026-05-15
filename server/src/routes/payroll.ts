@@ -9,14 +9,25 @@ import {
   createPayrollPeriod,
   getPayrollRecords,
   getPayrollRecordById,
+  getPayrollRecordBreakdown,
+  getPayrollRecordPayslip,
+  getPayrollReport,
   getMyPayrollRecords,
+  getStatutoryRuleVersions,
+  validatePayrollPeriod,
   processPayroll,
   approvePayroll,
+  requestPayrollCorrection,
   releasePayroll,
+  unlockPayroll,
+  getPayrollAuditLogs,
+  getPayrollRecordSnapshots,
   downloadPayslip,
+  downloadPayslipPdf,
+  exportPayrollReport,
   computeEmployeeTax,
 } from '../controllers/payrollController'
-import { authenticate, employeeSelfService, requireRole } from '../middleware/auth'
+import { authenticate, employeeSelfService, requirePayrollPermission } from '../middleware/auth'
 
 const router = Router()
 
@@ -24,19 +35,34 @@ router.use(authenticate)
 
 // Employee
 router.get('/my-records', employeeSelfService, getMyPayrollRecords)
+router.get('/my-records/:id', employeeSelfService, getPayrollRecordPayslip)
+router.get('/my-records/:id/pdf', employeeSelfService, downloadPayslipPdf)
 router.get('/compute-tax', computeEmployeeTax)
 
 // Admin/Finance
-router.get('/periods', requireRole('admin'), getPayrollPeriods)
-router.post('/periods', requireRole('admin'), createPayrollPeriod)
-router.get('/periods/:id', requireRole('admin'), getPayrollPeriodById)
-router.get('/periods/:periodId/leave-impacts', requireRole('admin'), getPayrollPeriodLeaveImpacts)
-router.post('/periods/:periodId/apply-leave-adjustments', requireRole('admin'), applyPayrollPeriodLeaveAdjustments)
-router.get('/records', requireRole('admin'), getPayrollRecords)
-router.get('/records/:id', requireRole('admin'), getPayrollRecordById)
-router.get('/records/:id/payslip', downloadPayslip)
-router.post('/process', requireRole('admin'), processPayroll)
-router.post('/periods/:id/approve', requireRole('admin'), approvePayroll)
-router.post('/periods/:id/release', requireRole('admin'), releasePayroll)
+router.get('/periods', requirePayrollPermission('payroll:view'), getPayrollPeriods)
+router.post('/periods', requirePayrollPermission('payroll:create_period'), createPayrollPeriod)
+router.get('/periods/:id', requirePayrollPermission('payroll:view'), getPayrollPeriodById)
+router.get('/periods/:id/reports/export', requirePayrollPermission('payroll:export_reports'), exportPayrollReport)
+router.get('/periods/:id/reports/:reportType', requirePayrollPermission('payroll:view_reports'), getPayrollReport)
+router.get('/periods/:id/validation', requirePayrollPermission('payroll:validate'), validatePayrollPeriod)
+router.post('/periods/:id/validation', requirePayrollPermission('payroll:validate'), validatePayrollPeriod)
+router.get('/periods/:id/audit-logs', requirePayrollPermission('payroll:view_audit_logs'), getPayrollAuditLogs)
+router.get('/statutory-rules', requirePayrollPermission('payroll:view'), getStatutoryRuleVersions)
+router.get('/periods/:periodId/leave-impacts', requirePayrollPermission('payroll:view'), getPayrollPeriodLeaveImpacts)
+router.post('/periods/:periodId/apply-leave-adjustments', requirePayrollPermission('payroll:process'), applyPayrollPeriodLeaveAdjustments)
+router.get('/records', requirePayrollPermission('payroll:view'), getPayrollRecords)
+router.get('/records/:id', requirePayrollPermission('payroll:view'), getPayrollRecordById)
+router.get('/records/:id/breakdown', requirePayrollPermission('payroll:view'), getPayrollRecordBreakdown)
+router.get('/records/:id/snapshots', requirePayrollPermission('payroll:view_audit_logs'), getPayrollRecordSnapshots)
+router.get('/records/:id/payslip', requirePayrollPermission('payroll:view_payslips'), getPayrollRecordPayslip)
+router.get('/records/:id/payslip/pdf', requirePayrollPermission('payroll:view_payslips'), downloadPayslip)
+router.post('/process', requirePayrollPermission('payroll:process'), processPayroll)
+router.post('/periods/:id/process', requirePayrollPermission('payroll:process'), processPayroll)
+router.post('/periods/:id/reprocess', requirePayrollPermission('payroll:reprocess'), processPayroll)
+router.post('/periods/:id/approve', requirePayrollPermission('payroll:approve'), approvePayroll)
+router.post('/periods/:id/request-correction', requirePayrollPermission('payroll:request_correction'), requestPayrollCorrection)
+router.post('/periods/:id/release', requirePayrollPermission('payroll:release'), releasePayroll)
+router.post('/periods/:id/unlock', requirePayrollPermission('payroll:unlock'), unlockPayroll)
 
 export default router

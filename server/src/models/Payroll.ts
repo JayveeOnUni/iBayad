@@ -1,7 +1,17 @@
 import pool from '../utils/db'
 
 export type PayFrequency = 'weekly' | 'semi-monthly' | 'monthly'
-export type PayrollStatus = 'draft' | 'processing' | 'approved' | 'released' | 'cancelled'
+export type PayrollStatus =
+  | 'draft'
+  | 'processing'
+  | 'processed'
+  | 'validation_failed'
+  | 'ready_for_approval'
+  | 'needs_correction'
+  | 'approved'
+  | 'released'
+  | 'locked'
+  | 'cancelled'
 
 export interface PayrollPeriodRow {
   id: string
@@ -99,9 +109,9 @@ export class PayrollPeriodModel {
          summaries AS (
            SELECT payroll_period_id,
                   COUNT(*)::int AS record_count,
-                  COUNT(*) FILTER (WHERE status = 'processing')::int AS processing_record_count,
+                  COUNT(*) FILTER (WHERE status IN ('processing', 'processed', 'validation_failed', 'ready_for_approval', 'needs_correction'))::int AS processing_record_count,
                   COUNT(*) FILTER (WHERE status = 'approved')::int AS approved_record_count,
-                  COUNT(*) FILTER (WHERE status = 'released')::int AS released_record_count,
+                  COUNT(*) FILTER (WHERE status IN ('released', 'locked'))::int AS released_record_count,
                   COALESCE(SUM(gross_pay), 0) AS total_gross_pay,
                   COALESCE(SUM(total_deductions), 0) AS total_deductions,
                   COALESCE(SUM(net_pay), 0) AS total_net_pay,
@@ -145,9 +155,9 @@ export class PayrollPeriodModel {
        summaries AS (
          SELECT payroll_period_id,
                 COUNT(*)::int AS record_count,
-                COUNT(*) FILTER (WHERE status = 'processing')::int AS processing_record_count,
+                COUNT(*) FILTER (WHERE status IN ('processing', 'processed', 'validation_failed', 'ready_for_approval', 'needs_correction'))::int AS processing_record_count,
                 COUNT(*) FILTER (WHERE status = 'approved')::int AS approved_record_count,
-                COUNT(*) FILTER (WHERE status = 'released')::int AS released_record_count,
+                COUNT(*) FILTER (WHERE status IN ('released', 'locked'))::int AS released_record_count,
                 COALESCE(SUM(gross_pay), 0) AS total_gross_pay,
                 COALESCE(SUM(total_deductions), 0) AS total_deductions,
                 COALESCE(SUM(net_pay), 0) AS total_net_pay,

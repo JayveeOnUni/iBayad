@@ -82,7 +82,7 @@ export class LeavePayrollImpactService {
   static async applyPeriodAdjustments(payrollPeriodId: string): Promise<number> {
     const result = await pool.query(
       `UPDATE payroll_leave_adjustments
-       SET payroll_period_id = $1, status = 'applied', applied_at = NOW()
+       SET payroll_period_id = $1, updated_at = NOW()
        WHERE (payroll_period_id = $1 OR payroll_period_id IS NULL)
          AND status = 'pending'
        RETURNING id`,

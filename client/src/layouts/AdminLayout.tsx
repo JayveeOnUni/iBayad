@@ -22,6 +22,7 @@ import {
 import Sidebar from '../components/layout/Sidebar'
 import MainHeader from '../components/layout/MainHeader'
 import type { NavItem } from '../components/layout/Sidebar'
+import { useAuthStore } from '../store/authStore'
 
 const adminNav: NavItem[] = [
   { label: 'Dashboard', to: '/admin/dashboard', icon: <LayoutDashboard size={18} /> },
@@ -54,7 +55,6 @@ const adminNav: NavItem[] = [
     label: 'Administration',
     icon: <FolderOpen size={18} />,
     children: [
-      { label: 'Roles', to: '/admin/administration/roles', icon: <Users size={15} /> },
       { label: 'Departments', to: '/admin/administration/departments', icon: <Building2 size={15} /> },
       { label: 'Shifts', to: '/admin/administration/shifts', icon: <Clock3 size={15} /> },
       { label: 'Holidays', to: '/admin/administration/holidays', icon: <Calendar size={15} /> },
@@ -73,8 +73,23 @@ const adminNav: NavItem[] = [
   },
 ]
 
+const fullAdminRoles = new Set(['admin', 'super_admin'])
+
 export default function AdminLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const user = useAuthStore((state) => state.user)
+  const isFullAdmin = fullAdminRoles.has(user?.role ?? '')
+  const navItems = isFullAdmin
+    ? adminNav
+    : [
+        {
+          label: 'Job Desk',
+          icon: <Briefcase size={18} />,
+          children: [
+            { label: 'Payroll', to: '/admin/payroll', icon: <CreditCard size={15} /> },
+          ],
+        },
+      ]
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-surface">
@@ -82,7 +97,7 @@ export default function AdminLayout() {
 
       <div className="flex flex-1 overflow-hidden">
         <div className="hidden lg:block">
-          <Sidebar items={adminNav} />
+          <Sidebar items={navItems} />
         </div>
 
         {sidebarOpen && (
@@ -105,7 +120,7 @@ export default function AdminLayout() {
                 </button>
               </div>
               <div className="h-[calc(100%-3.5rem)]">
-                <Sidebar items={adminNav} onNavigate={() => setSidebarOpen(false)} />
+                <Sidebar items={navItems} onNavigate={() => setSidebarOpen(false)} />
               </div>
             </div>
           </div>

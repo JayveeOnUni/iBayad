@@ -8,9 +8,10 @@ import Avatar from '../../../components/ui/Avatar'
 import Modal from '../../../components/ui/Modal'
 import Input from '../../../components/ui/Input'
 import { formatDate, yearsOfService } from '../../../utils/dateHelpers'
-import { formatPeso, computeAllContributions } from '../../../utils/taxComputation'
+import { formatPeso } from '../../../utils/taxComputation'
 import type { Employee } from '../../../types'
 import { employeeService } from '../../../services/employeeService'
+import { payrollService } from '../../../services/payrollService'
 
 interface InfoRowProps {
   icon?: React.ReactNode
@@ -41,6 +42,7 @@ export default function EmployeeDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [editForm, setEditForm] = useState({ phone: '', address: '', city: '', basicSalary: 0 })
+  const [deductionPreview, setDeductionPreview] = useState<Record<string, unknown> | null>(null)
 
   useEffect(() => {
     const loadEmployee = async () => {
@@ -50,6 +52,9 @@ export default function EmployeeDetailPage() {
         setError(null)
         const res = await employeeService.getById(id)
         setEmployee(res.data)
+        payrollService.computeTax(res.data.basicSalary)
+          .then((taxRes) => setDeductionPreview(taxRes.data))
+          .catch(() => setDeductionPreview(null))
         setEditForm({
           phone: res.data.phone ?? '',
           address: res.data.address ?? '',
@@ -104,7 +109,10 @@ export default function EmployeeDetailPage() {
   if (!employee) return <div className="p-8 text-sm text-red-700">{error ?? 'Employee not found.'}</div>
 
   const fullName = `${employee.firstName} ${employee.lastName}`
-  const contributions = computeAllContributions(employee.basicSalary)
+  const sss = (deductionPreview?.sss ?? {}) as Record<string, unknown>
+  const philHealth = (deductionPreview?.philHealth ?? {}) as Record<string, unknown>
+  const pagIBIG = (deductionPreview?.pagIBIG ?? {}) as Record<string, unknown>
+  const previewNetPay = Number(deductionPreview?.netPay ?? employee.basicSalary)
 
   return (
     <div className="space-y-5">
@@ -241,10 +249,10 @@ export default function EmployeeDetailPage() {
               </p>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {[
-                  { label: 'SSS', value: contributions.sss.employeeShare },
-                  { label: 'PhilHealth', value: contributions.philhealth.employeeShare },
-                  { label: 'Pag-IBIG', value: contributions.pagibig.employeeShare },
-                  { label: 'Withholding Tax', value: contributions.withholdingTax.monthlyTax },
+                  { label: 'SSS', value: Number(sss.employee ?? 0) },
+                  { label: 'PhilHealth', value: Number(philHealth.employee ?? 0) },
+                  { label: 'Pag-IBIG', value: Number(pagIBIG.employee ?? 0) },
+                  { label: 'Withholding Tax', value: Number(deductionPreview?.withholdingTax ?? 0) },
                 ].map((c) => (
                   <div key={c.label} className="text-center border border-border rounded-lg p-3">
                     <p className="text-xs text-muted">{c.label}</p>
@@ -255,7 +263,7 @@ export default function EmployeeDetailPage() {
               <div className="mt-3 flex justify-between items-center px-3 py-2.5 bg-slate-50 rounded-lg">
                 <span className="text-sm font-medium text-ink">Estimated Net Pay</span>
                 <span className="text-base font-bold text-emerald-600">
-                  {formatPeso(contributions.netPay)}
+                  {formatPeso(previewNetPay)}
                 </span>
               </div>
             </div>

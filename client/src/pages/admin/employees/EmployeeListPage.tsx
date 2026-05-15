@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus, Search, Download } from 'lucide-react'
 import Card from '../../../components/ui/Card'
@@ -6,60 +6,16 @@ import Button from '../../../components/ui/Button'
 import Table, { Pagination } from '../../../components/ui/Table'
 import Badge from '../../../components/ui/Badge'
 import Avatar from '../../../components/ui/Avatar'
-import Modal from '../../../components/ui/Modal'
 import Input from '../../../components/ui/Input'
 import Select from '../../../components/ui/Select'
 import { FeedbackMessage, PageHeader } from '../../../components/ui/Page'
-import type { Employee, EmployeeFormData } from '../../../types'
+import type { Employee } from '../../../types'
 import { formatDate } from '../../../utils/dateHelpers'
 import { formatPeso } from '../../../utils/taxComputation'
 import { employeeService } from '../../../services/employeeService'
+import AddEmployeeModal from './AddEmployeeModal'
 
-const defaultEmployeeForm: EmployeeFormData = {
-  firstName: '',
-  lastName: '',
-  email: '',
-  phone: '',
-  birthDate: '',
-  gender: 'other',
-  civilStatus: 'single',
-  address: '',
-  city: '',
-  province: '',
-  zipCode: '',
-  departmentId: '',
-  positionId: '',
-  employmentType: 'regular',
-  hireDate: new Date().toISOString().slice(0, 10),
-  basicSalary: 0,
-  sssNumber: '',
-  philhealthNumber: '',
-  pagibigNumber: '',
-  tinNumber: '',
-}
-
-const governmentIdFields = [
-  { key: 'sssNumber', label: 'SSS Number', placeholder: 'e.g. 12-3456789-0' },
-  { key: 'philhealthNumber', label: 'PhilHealth Number', placeholder: 'e.g. 12-345678901-2' },
-  { key: 'pagibigNumber', label: 'Pag-IBIG Number', placeholder: 'e.g. 1234-5678-9012' },
-  { key: 'tinNumber', label: 'TIN Number', placeholder: 'e.g. 123-456-789-000' },
-] as const
-
-function validateGovernmentId(value: string | undefined, label: string) {
-  const trimmed = value?.trim() ?? ''
-  if (!trimmed) return null
-  if (trimmed.length > 30) return `${label} must be 30 characters or fewer.`
-  if (!/^[0-9 -]+$/.test(trimmed)) return `${label} must contain only numbers, spaces, or hyphens.`
-  return null
-}
-
-function validateEmployeeForm(form: EmployeeFormData) {
-  for (const field of governmentIdFields) {
-    const error = validateGovernmentId(form[field.key], field.label)
-    if (error) return error
-  }
-  return null
-}
+type CreateEmployeeResponse = Awaited<ReturnType<typeof employeeService.create>>
 
 export default function EmployeeListPage() {
   const navigate = useNavigate()
@@ -70,68 +26,43 @@ export default function EmployeeListPage() {
   const [totalPages, setTotalPages] = useState(1)
   const [employees, setEmployees] = useState<Employee[]>([])
   const [isLoading, setIsLoading] = useState(true)
-  const [isSaving, setIsSaving] = useState(false)
   const [isExporting, setIsExporting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [isAddOpen, setIsAddOpen] = useState(false)
-  const [form, setForm] = useState<EmployeeFormData>(defaultEmployeeForm)
 
-  useEffect(() => {
-    const loadEmployees = async () => {
-      try {
-        setIsLoading(true)
-        setError(null)
-        const res = await employeeService.list({
-          page,
-          limit: 10,
-          search: search || undefined,
-          status: statusFilter || undefined,
-        })
-        setEmployees(res.data)
-        setTotalEmployees(res.total)
-        setTotalPages(Math.max(1, res.totalPages))
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unable to load employees.')
-      } finally {
-        setIsLoading(false)
-      }
+  const loadEmployees = useCallback(async () => {
+    try {
+      setIsLoading(true)
+      setError(null)
+      const res = await employeeService.list({
+        page,
+        limit: 10,
+        search: search || undefined,
+        status: statusFilter || undefined,
+      })
+      setEmployees(res.data)
+      setTotalEmployees(res.total)
+      setTotalPages(Math.max(1, res.totalPages))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to load employees.')
+    } finally {
+      setIsLoading(false)
     }
-
-    loadEmployees()
   }, [page, search, statusFilter])
 
-  const updateForm = (key: keyof EmployeeFormData, value: string | number) => {
-    setForm((current) => ({ ...current, [key]: value }))
-  }
+  useEffect(() => {
+    void loadEmployees()
+  }, [loadEmployees])
 
-  const createEmployee = async () => {
-    const validationError = validateEmployeeForm(form)
-    if (validationError) {
-      setError(validationError)
-      setSuccess(null)
-      return
-    }
-
-    try {
-      setIsSaving(true)
-      setError(null)
-      setSuccess(null)
-      const res = await employeeService.create(form)
-      setEmployees((current) => [res.data, ...current])
-      setTotalEmployees((current) => current + 1)
-      setIsAddOpen(false)
-      setForm(defaultEmployeeForm)
-      setSuccess(
-        res.activationLink
-          ? `${res.message ?? 'Employee account created.'} Activation link: ${res.activationLink}`
-          : res.message ?? 'Employee account created. Activation email sent.'
-      )
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to create employee.')
-    } finally {
-      setIsSaving(false)
-    }
+  const handleEmployeeCreated = async (res: CreateEmployeeResponse) => {
+    setIsAddOpen(false)
+    await loadEmployees()
+    setSuccess(
+      res.activationLink
+        ? `${res.message ?? 'Employee account created.'} Activation link: ${res.activationLink}`
+        : res.message ?? 'Employee account created. Activation email sent.'
+    )
   }
 
   const exportEmployees = async () => {
@@ -193,7 +124,15 @@ export default function EmployeeListPage() {
           <Button variant="outline" size="sm" leftIcon={<Download size={14} />} onClick={exportEmployees} isLoading={isExporting}>
             Export
           </Button>
-          <Button size="sm" leftIcon={<Plus size={14} />} onClick={() => setIsAddOpen(true)}>
+          <Button
+            size="sm"
+            leftIcon={<Plus size={14} />}
+            onClick={() => {
+              setError(null)
+              setSuccess(null)
+              setIsAddOpen(true)
+            }}
+          >
             Add Employee
           </Button>
           </>
@@ -322,43 +261,11 @@ export default function EmployeeListPage() {
         />
       </Card>
 
-      <Modal
+      <AddEmployeeModal
         isOpen={isAddOpen}
         onClose={() => setIsAddOpen(false)}
-        title="Add Employee"
-        size="lg"
-        footer={
-          <>
-            <Button variant="outline" onClick={() => setIsAddOpen(false)} disabled={isSaving}>Cancel</Button>
-            <Button onClick={createEmployee} isLoading={isSaving}>Save Employee</Button>
-          </>
-        }
-      >
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Input label="First Name" required value={form.firstName} onChange={(e) => updateForm('firstName', e.target.value)} />
-          <Input label="Last Name" required value={form.lastName} onChange={(e) => updateForm('lastName', e.target.value)} />
-          <Input label="Email" type="email" required value={form.email} onChange={(e) => updateForm('email', e.target.value)} />
-          <Input label="Phone" value={form.phone} onChange={(e) => updateForm('phone', e.target.value)} />
-          <Input label="Hire Date" type="date" required value={form.hireDate} onChange={(e) => updateForm('hireDate', e.target.value)} />
-          <Input label="Basic Salary" type="number" required value={form.basicSalary || ''} onChange={(e) => updateForm('basicSalary', Number(e.target.value))} />
-          {governmentIdFields.map((field) => (
-            <Input
-              key={field.key}
-              label={field.label}
-              placeholder={field.placeholder}
-              value={form[field.key] ?? ''}
-              inputMode="numeric"
-              pattern="[0-9 -]*"
-              maxLength={30}
-              onChange={(e) => updateForm(field.key, e.target.value)}
-            />
-          ))}
-          <Input label="Department ID" value={form.departmentId} onChange={(e) => updateForm('departmentId', e.target.value)} />
-          <Input label="Position ID" value={form.positionId} onChange={(e) => updateForm('positionId', e.target.value)} />
-          <Input label="City" value={form.city} onChange={(e) => updateForm('city', e.target.value)} />
-          <Input label="Province" value={form.province} onChange={(e) => updateForm('province', e.target.value)} />
-        </div>
-      </Modal>
+        onCreated={handleEmployeeCreated}
+      />
     </div>
   )
 }

@@ -16,7 +16,6 @@ const labelMap: Record<string, string> = {
   summary: 'Summary',
   status: 'Status',
   calendar: 'Calendar',
-  roles: 'Roles',
   departments: 'Departments',
   shifts: 'Shifts',
   holidays: 'Holidays',

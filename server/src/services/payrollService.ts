@@ -1,8 +1,9 @@
 import pool from '../utils/db'
-import { computeDeductions } from '../utils/taxComputation'
+import { computeGovernmentDeductionsForPeriod, type PayFrequency } from '../utils/statutoryDeductions'
 import { getDailyRate, getHourlyRate, countWorkingDays } from '../utils/dateHelpers'
 import { createError } from '../middleware/errorHandler'
 import type { Pool, PoolClient } from 'pg'
+import crypto from 'crypto'
 
 type Queryable = Pool | PoolClient
 
@@ -10,8 +11,13 @@ export interface PayrollInput {
   employeeId: string
   payrollPeriodId: string
   basicSalary: number
+  payFrequency: PayFrequency
+  periodEndDate: Date | string
+  expectedWorkDays: number
   daysWorked: number
   absenceDays: number
+  paidLeaveDays: number
+  unpaidLeaveDays: number
   lateMins: number
   overtimeHours: number
   holidayHours: number
@@ -22,6 +28,14 @@ export interface PayrollInput {
   undertimeMinutes: number
   offsetBalanceMinutes: number
   allowances: number
+  nonTaxableEarnings?: number
+  preTaxDeductions?: number
+  leaveAdjustmentDeductions?: number
+  leaveAdjustmentEarnings?: number
+  leaveAdjustmentUnpaidDays?: number
+  leaveAdjustmentIds?: string[]
+  leaveAdjustmentItems?: Array<Record<string, unknown>>
+  loanDeductionItems?: PayrollLoanDeductionDraft[]
   otherEarnings: number
   loanDeductions: number
   otherDeductions: number
@@ -35,12 +49,20 @@ export interface PayrollResult {
   basicSalary: number
   dailyRate: number
   hourlyRate: number
+  expectedWorkDays: number
+  daysWorked: number
+  paidLeaveDays: number
+  unpaidLeaveDays: number
+  lateMinutes: number
   // Earnings
   regularPay: number
   overtimePay: number
   holidayPay: number
   nightDiffPay: number
   allowances: number
+  taxableEarnings: number
+  nonTaxableEarnings: number
+  paidLeaveAmount: number
   otherEarnings: number
   grossPay: number
   excessMinutes: number
@@ -51,9 +73,15 @@ export interface PayrollResult {
   // Deductions
   absenceDeduction: number
   lateDeduction: number
+  undertimeDeduction: number
+  leaveDeduction: number
   sssEmployee: number
   philHealthEmployee: number
   pagIBIGEmployee: number
+  preTaxDeductions: number
+  statutoryDeductions: number
+  postTaxDeductions: number
+  taxableIncome: number
   withholdingTax: number
   loanDeductions: number
   otherDeductions: number
@@ -62,46 +90,189 @@ export interface PayrollResult {
   sssEmployer: number
   philHealthEmployer: number
   pagIBIGEmployer: number
+  employerContributions: number
   // Net
   netPay: number
+  statutoryRuleVersion: string
+  statutoryRuleVersions: Record<string, unknown>
+  computationBreakdown: Record<string, unknown>
+  leaveAdjustmentIds: string[]
+  loanDeductionItems: PayrollLoanDeductionDraft[]
 }
 
-export function computePayroll(input: PayrollInput): PayrollResult {
+export interface PayrollLoanDeductionDraft {
+  employeeId: string
+  loanId: string
+  payrollPeriodId: string
+  scheduledAmount: number
+  deductedAmount: number
+  remainingBalanceBefore: number
+  remainingBalanceAfter: number
+  deductionDate: string
+}
+
+interface PayrollSnapshotContext {
+  payrollRecordId: string
+  payrollPeriodId: string
+  payrollFrequency: PayFrequency
+  periodStart: Date | string
+  periodEnd: Date | string
+  computedBy?: string
+}
+
+function round2(value: number): number {
+  return Math.round((Number.isFinite(value) ? value : 0) * 100) / 100
+}
+
+function toNumber(value: unknown): number {
+  const numberValue = Number(value ?? 0)
+  return Number.isFinite(numberValue) ? numberValue : 0
+}
+
+function dateOnly(value: Date | string): string {
+  if (value instanceof Date) return value.toISOString().slice(0, 10)
+  return String(value ?? '').slice(0, 10)
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value as Record<string, unknown>)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableStringify((value as Record<string, unknown>)[key])}`)
+      .join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+function allocationFactorForFrequency(
+  payFrequency: PayFrequency,
+  expectedWorkDays: number,
+  workDaysPerMonth: number
+): number {
+  if (payFrequency === 'monthly') return 1
+  if (payFrequency === 'semi-monthly') return 0.5
+  return Math.min(1, Math.max(0, expectedWorkDays / Math.max(1, workDaysPerMonth)))
+}
+
+export async function computePayroll(input: PayrollInput, db: Queryable = pool): Promise<PayrollResult> {
   const workDaysPerMonth = input.workDaysPerMonth ?? 22
   const workHoursPerDay = input.workHoursPerDay ?? 8
 
   const dailyRate = getDailyRate(input.basicSalary, workDaysPerMonth)
   const hourlyRate = getHourlyRate(dailyRate, workHoursPerDay)
-  const scheduledWorkDays = input.daysWorked + input.absenceDays
-  const deductibleTimeMinutes =
-    input.lateMins + Math.max(0, input.undertimeMinutes - input.lateMins)
+  const expectedWorkDays = Math.max(0, input.expectedWorkDays)
+  const daysWorked = Math.max(0, input.daysWorked)
+  const absenceDays = Math.max(0, input.absenceDays)
+  const paidLeaveDays = Math.max(0, input.paidLeaveDays)
+  const unpaidLeaveDays = Math.max(0, input.unpaidLeaveDays)
+  const undertimeOnlyMinutes = Math.max(0, input.undertimeMinutes - input.lateMins)
 
   // Earnings
-  const regularPay = Math.round(dailyRate * scheduledWorkDays * 100) / 100
+  const regularPay = Math.round(dailyRate * expectedWorkDays * 100) / 100
   const overtimePay = Math.round(hourlyRate * input.overtimeHours * 1.25 * 100) / 100
   const holidayPay = Math.round(hourlyRate * input.holidayHours * 2.0 * 100) / 100
-  const nightDiffPay = 0
+  const nightDiffPay = round2(hourlyRate * input.nightDiffHours * 0.10)
 
-  const grossPay = regularPay + overtimePay + holidayPay + input.allowances + input.otherEarnings
+  const paidLeaveAmount = round2(dailyRate * paidLeaveDays)
+  const leaveAdjustmentEarnings = round2(input.leaveAdjustmentEarnings ?? 0)
+  const taxableEarnings = round2(
+    regularPay + overtimePay + holidayPay + nightDiffPay + input.allowances + input.otherEarnings + leaveAdjustmentEarnings
+  )
+  const nonTaxableEarnings = round2(input.nonTaxableEarnings ?? 0)
+  const grossPay = round2(taxableEarnings + nonTaxableEarnings)
 
   // Absence and time-based deductions. Late minutes can also reduce rendered time,
   // so only undertime beyond late minutes is added to avoid double-counting.
-  const absenceDeduction = Math.round(dailyRate * input.absenceDays * 100) / 100
-  const lateDeduction = Math.round(hourlyRate * (deductibleTimeMinutes / 60) * 100) / 100
+  const absenceDeduction = Math.round(dailyRate * absenceDays * 100) / 100
+  const lateDeduction = Math.round(hourlyRate * (input.lateMins / 60) * 100) / 100
+  const undertimeDeduction = Math.round(hourlyRate * (undertimeOnlyMinutes / 60) * 100) / 100
+  const adjustmentUnpaidValue = dailyRate * (input.leaveAdjustmentUnpaidDays ?? 0)
+  const adjustmentDeductionDelta = Math.max(0, (input.leaveAdjustmentDeductions ?? 0) - adjustmentUnpaidValue)
+  const leaveDeduction = round2((dailyRate * unpaidLeaveDays) + adjustmentDeductionDelta)
+  const preTaxDeductions = round2(input.preTaxDeductions ?? 0)
+  const taxableGrossForPeriod = round2(Math.max(
+    0,
+    taxableEarnings - absenceDeduction - lateDeduction - undertimeDeduction - leaveDeduction
+  ))
 
-  // Government contributions based on basic salary
-  const deductions = computeDeductions(input.basicSalary)
+  const statutory = await computeGovernmentDeductionsForPeriod({
+    monthlyBasicSalary: input.basicSalary,
+    taxableGrossForPeriod,
+    payFrequency: input.payFrequency,
+    periodEndDate: input.periodEndDate,
+    expectedWorkDays,
+    workDaysPerMonth,
+    preTaxDeductions,
+  }, db)
+
+  const statutoryDeductions = round2(
+    statutory.sss.employee +
+    statutory.philHealth.employee +
+    statutory.pagIBIG.employee +
+    statutory.withholdingTax
+  )
+  const postTaxDeductions = round2(input.loanDeductions + input.otherDeductions)
+  const employerContributions = round2(
+    statutory.sss.employer +
+    statutory.philHealth.employer +
+    statutory.pagIBIG.employer
+  )
 
   // Total employee deductions
   const totalDeductions =
     absenceDeduction +
     lateDeduction +
-    deductions.sss.employee +
-    deductions.philHealth.employee +
-    deductions.pagIBIG.employee +
-    deductions.withholdingTax +
-    input.loanDeductions +
-    input.otherDeductions
+    undertimeDeduction +
+    leaveDeduction +
+    preTaxDeductions +
+    statutoryDeductions +
+    postTaxDeductions
+
+  const netPay = round2(grossPay - totalDeductions)
+  const computationBreakdown = {
+    earnings: {
+      basicPay: regularPay,
+      overtimePay,
+      holidayPay,
+      nightDiffPay,
+      paidLeaveAmount,
+      taxableAllowances: input.allowances,
+      otherTaxableEarnings: input.otherEarnings,
+      nonTaxableEarnings,
+      taxableEarnings,
+      grossPay,
+    },
+    deductions: {
+      absenceDeduction,
+      lateDeduction,
+      undertimeDeduction,
+      unpaidLeaveDeduction: leaveDeduction,
+      preTaxDeductions,
+      loanDeductions: input.loanDeductions,
+      otherDeductions: input.otherDeductions,
+      statutoryDeductions,
+      totalDeductions: round2(totalDeductions),
+    },
+    governmentDeductions: {
+      sssEmployee: statutory.sss.employee,
+      philHealthEmployee: statutory.philHealth.employee,
+      pagIBIGEmployee: statutory.pagIBIG.employee,
+      withholdingTax: statutory.withholdingTax,
+      taxableIncome: statutory.taxableIncome,
+    },
+    employerContributions: {
+      sssEmployer: statutory.sss.employer,
+      philHealthEmployer: statutory.philHealth.employer,
+      pagIBIGEmployer: statutory.pagIBIG.employer,
+      total: employerContributions,
+    },
+    leaveAdjustments: input.leaveAdjustmentItems ?? [],
+    leaveAdjustmentIds: input.leaveAdjustmentIds ?? [],
+    loanDeductions: input.loanDeductionItems ?? [],
+    statutoryRuleVersions: statutory.ruleVersions,
+    netPay,
+  }
 
   return {
     employeeId: input.employeeId,
@@ -109,11 +280,19 @@ export function computePayroll(input: PayrollInput): PayrollResult {
     basicSalary: input.basicSalary,
     dailyRate,
     hourlyRate,
+    expectedWorkDays,
+    daysWorked,
+    paidLeaveDays,
+    unpaidLeaveDays,
+    lateMinutes: Math.round(input.lateMins),
     regularPay,
     overtimePay,
     holidayPay,
     nightDiffPay,
     allowances: input.allowances,
+    taxableEarnings,
+    nonTaxableEarnings,
+    paidLeaveAmount,
     otherEarnings: input.otherEarnings,
     grossPay,
     excessMinutes: Math.round(input.excessMinutes),
@@ -123,17 +302,29 @@ export function computePayroll(input: PayrollInput): PayrollResult {
     offsetBalanceMinutes: Math.round(input.offsetBalanceMinutes),
     absenceDeduction,
     lateDeduction,
-    sssEmployee: deductions.sss.employee,
-    philHealthEmployee: deductions.philHealth.employee,
-    pagIBIGEmployee: deductions.pagIBIG.employee,
-    withholdingTax: deductions.withholdingTax,
+    undertimeDeduction,
+    leaveDeduction,
+    sssEmployee: statutory.sss.employee,
+    philHealthEmployee: statutory.philHealth.employee,
+    pagIBIGEmployee: statutory.pagIBIG.employee,
+    preTaxDeductions,
+    statutoryDeductions,
+    postTaxDeductions,
+    taxableIncome: statutory.taxableIncome,
+    withholdingTax: statutory.withholdingTax,
     loanDeductions: input.loanDeductions,
     otherDeductions: input.otherDeductions,
     totalDeductions,
-    sssEmployer: deductions.sss.employer,
-    philHealthEmployer: deductions.philHealth.employer,
-    pagIBIGEmployer: deductions.pagIBIG.employer,
-    netPay: Math.round((grossPay - totalDeductions) * 100) / 100,
+    sssEmployer: statutory.sss.employer,
+    philHealthEmployer: statutory.philHealth.employer,
+    pagIBIGEmployer: statutory.pagIBIG.employer,
+    employerContributions,
+    netPay,
+    statutoryRuleVersion: statutory.ruleVersion,
+    statutoryRuleVersions: statutory.ruleVersions,
+    computationBreakdown,
+    leaveAdjustmentIds: input.leaveAdjustmentIds ?? [],
+    loanDeductionItems: input.loanDeductionItems ?? [],
   }
 }
 
@@ -142,27 +333,38 @@ export async function savePayrollRecord(record: PayrollResult, db: Queryable = p
     `INSERT INTO payroll_records (
       employee_id, payroll_period_id,
       basic_salary, daily_rate, hourly_rate,
-      regular_pay, overtime_pay, holiday_pay, night_diff_pay, allowances, other_earnings, gross_pay,
+      expected_work_days, days_worked, paid_leave_days, unpaid_leave_days, late_minutes,
+      regular_pay, overtime_pay, holiday_pay, night_diff_pay, allowances, other_earnings,
+      taxable_earnings, non_taxable_earnings, paid_leave_amount, gross_pay,
       excess_minutes, offset_earned_minutes, offset_used_minutes, undertime_minutes, offset_balance_minutes,
-      absence_deduction, late_deduction,
-      sss_employee, phil_health_employee, pag_ibig_employee, withholding_tax,
+      absence_deduction, late_deduction, undertime_deduction, leave_deduction,
+      sss_employee, phil_health_employee, pag_ibig_employee, taxable_income, withholding_tax,
+      pre_tax_deductions, statutory_deductions, post_tax_deductions,
       loan_deductions, other_deductions, total_deductions,
       sss_employer, phil_health_employer, pag_ibig_employer,
-      net_pay, status
+      employer_contributions, net_pay, statutory_rule_version, statutory_rule_versions, computation_breakdown, status
     ) VALUES (
-      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,'draft'
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,'processed'
     )
     ON CONFLICT (employee_id, payroll_period_id)
     DO UPDATE SET
       basic_salary = EXCLUDED.basic_salary,
       daily_rate = EXCLUDED.daily_rate,
       hourly_rate = EXCLUDED.hourly_rate,
+      expected_work_days = EXCLUDED.expected_work_days,
+      days_worked = EXCLUDED.days_worked,
+      paid_leave_days = EXCLUDED.paid_leave_days,
+      unpaid_leave_days = EXCLUDED.unpaid_leave_days,
+      late_minutes = EXCLUDED.late_minutes,
       regular_pay = EXCLUDED.regular_pay,
       overtime_pay = EXCLUDED.overtime_pay,
       holiday_pay = EXCLUDED.holiday_pay,
       night_diff_pay = EXCLUDED.night_diff_pay,
       allowances = EXCLUDED.allowances,
       other_earnings = EXCLUDED.other_earnings,
+      taxable_earnings = EXCLUDED.taxable_earnings,
+      non_taxable_earnings = EXCLUDED.non_taxable_earnings,
+      paid_leave_amount = EXCLUDED.paid_leave_amount,
       gross_pay = EXCLUDED.gross_pay,
       excess_minutes = EXCLUDED.excess_minutes,
       offset_earned_minutes = EXCLUDED.offset_earned_minutes,
@@ -171,52 +373,389 @@ export async function savePayrollRecord(record: PayrollResult, db: Queryable = p
       offset_balance_minutes = EXCLUDED.offset_balance_minutes,
       absence_deduction = EXCLUDED.absence_deduction,
       late_deduction = EXCLUDED.late_deduction,
+      undertime_deduction = EXCLUDED.undertime_deduction,
+      leave_deduction = EXCLUDED.leave_deduction,
       sss_employee = EXCLUDED.sss_employee,
       phil_health_employee = EXCLUDED.phil_health_employee,
       pag_ibig_employee = EXCLUDED.pag_ibig_employee,
+      taxable_income = EXCLUDED.taxable_income,
       withholding_tax = EXCLUDED.withholding_tax,
+      pre_tax_deductions = EXCLUDED.pre_tax_deductions,
+      statutory_deductions = EXCLUDED.statutory_deductions,
+      post_tax_deductions = EXCLUDED.post_tax_deductions,
       loan_deductions = EXCLUDED.loan_deductions,
       other_deductions = EXCLUDED.other_deductions,
       total_deductions = EXCLUDED.total_deductions,
       sss_employer = EXCLUDED.sss_employer,
       phil_health_employer = EXCLUDED.phil_health_employer,
       pag_ibig_employer = EXCLUDED.pag_ibig_employer,
+      employer_contributions = EXCLUDED.employer_contributions,
       net_pay = EXCLUDED.net_pay,
+      statutory_rule_version = EXCLUDED.statutory_rule_version,
+      statutory_rule_versions = EXCLUDED.statutory_rule_versions,
+      computation_breakdown = EXCLUDED.computation_breakdown,
       updated_at = NOW()
+    WHERE payroll_records.is_locked = false
     RETURNING id`,
     [
       record.employeeId, record.payrollPeriodId,
       record.basicSalary, record.dailyRate, record.hourlyRate,
+      record.expectedWorkDays, record.daysWorked, record.paidLeaveDays, record.unpaidLeaveDays, record.lateMinutes,
       record.regularPay, record.overtimePay, record.holidayPay, record.nightDiffPay,
-      record.allowances, record.otherEarnings, record.grossPay,
+      record.allowances, record.otherEarnings, record.taxableEarnings,
+      record.nonTaxableEarnings, record.paidLeaveAmount, record.grossPay,
       record.excessMinutes, record.offsetEarnedMinutes, record.offsetUsedMinutes,
       record.undertimeMinutes, record.offsetBalanceMinutes,
-      record.absenceDeduction, record.lateDeduction,
+      record.absenceDeduction, record.lateDeduction, record.undertimeDeduction, record.leaveDeduction,
       record.sssEmployee, record.philHealthEmployee, record.pagIBIGEmployee,
-      record.withholdingTax, record.loanDeductions, record.otherDeductions,
+      record.taxableIncome, record.withholdingTax, record.preTaxDeductions, record.statutoryDeductions,
+      record.postTaxDeductions, record.loanDeductions, record.otherDeductions,
       record.totalDeductions,
       record.sssEmployer, record.philHealthEmployer, record.pagIBIGEmployer,
+      record.employerContributions, record.netPay, record.statutoryRuleVersion,
+      JSON.stringify(record.statutoryRuleVersions), JSON.stringify(record.computationBreakdown),
+    ]
+  )
+  if (!result.rows[0]) {
+    throw createError('Locked payroll records cannot be recalculated or overwritten.', 409)
+  }
+  return result.rows[0].id
+}
+
+async function createPayrollCalculationSnapshot(
+  record: PayrollResult,
+  context: PayrollSnapshotContext,
+  db: Queryable = pool
+): Promise<string> {
+  const attendanceResult = await db.query(
+    `SELECT
+       COUNT(*)::int AS attendance_rows,
+       COALESCE(SUM(CASE WHEN status IN ('present', 'late', 'half_day') THEN 1 ELSE 0 END), 0) AS days_worked,
+       COALESCE(SUM(CASE WHEN status = 'absent' THEN 1 ELSE 0 END), 0) AS absence_days,
+       COALESCE(SUM(CASE WHEN status = 'on_leave' THEN 1 ELSE 0 END), 0) AS leave_days,
+       COALESCE(SUM(late_minutes), 0) AS late_minutes,
+       COALESCE(SUM(undertime_minutes), 0) AS undertime_minutes,
+       COALESCE(SUM(overtime_hours), 0) AS overtime_hours,
+       COALESCE(SUM(holiday_hours), 0) AS holiday_hours,
+       COALESCE(SUM(excess_minutes), 0) AS excess_minutes,
+       COALESCE(SUM(offset_earned_minutes), 0) AS offset_earned_minutes,
+       COALESCE(SUM(offset_used_minutes), 0) AS offset_used_minutes
+     FROM attendance
+     WHERE employee_id = $1
+       AND date BETWEEN $2::date AND $3::date`,
+    [record.employeeId, dateOnly(context.periodStart), dateOnly(context.periodEnd)]
+  )
+
+  const breakdown = record.computationBreakdown ?? {}
+  const earningsBreakdown = (breakdown.earnings ?? {}) as Record<string, unknown>
+  const deductionsBreakdown = (breakdown.deductions ?? {}) as Record<string, unknown>
+  const employerBreakdown = (breakdown.employerContributions ?? {}) as Record<string, unknown>
+  const loanDeductionIds = record.loanDeductionItems.map((item) => item.loanId)
+  const snapshotPayload = {
+    payrollRecordId: context.payrollRecordId,
+    payrollPeriodId: context.payrollPeriodId,
+    employeeId: record.employeeId,
+    formulaVersion: 'phase3-v1',
+    payrollFrequency: context.payrollFrequency,
+    periodStart: dateOnly(context.periodStart),
+    periodEnd: dateOnly(context.periodEnd),
+    attendanceSummary: attendanceResult.rows[0] ?? {},
+    leaveAdjustmentIds: record.leaveAdjustmentIds,
+    loanDeductionIds,
+    statutoryRuleVersions: record.statutoryRuleVersions,
+    earningsBreakdown,
+    deductionsBreakdown,
+    employerBreakdown,
+    taxableIncome: record.taxableIncome,
+    nonTaxableEarnings: record.nonTaxableEarnings,
+    grossPay: record.grossPay,
+    totalDeductions: record.totalDeductions,
+    netPay: record.netPay,
+  }
+  const snapshotHash = crypto
+    .createHash('sha256')
+    .update(stableStringify(snapshotPayload))
+    .digest('hex')
+
+  const result = await db.query(
+    `WITH next_version AS (
+       SELECT COALESCE(MAX(snapshot_version), 0) + 1 AS version
+       FROM payroll_calculation_snapshots
+       WHERE payroll_record_id = $1
+     ),
+     inserted AS (
+       INSERT INTO payroll_calculation_snapshots (
+         payroll_record_id, payroll_period_id, employee_id, snapshot_version,
+         formula_version, payroll_frequency, payroll_period_start, payroll_period_end,
+         attendance_summary_json, leave_adjustment_ids_json, loan_deduction_ids_json,
+         statutory_rule_versions_json, earnings_breakdown_json, deductions_breakdown_json,
+         employer_contributions_json, taxable_income, non_taxable_earnings, gross_pay,
+         total_deductions, net_pay, computed_by, snapshot_hash
+       )
+       SELECT
+         $1, $2, $3, version, 'phase3-v1', $4::pay_frequency, $5::date, $6::date,
+         $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, $12::jsonb,
+         $13::jsonb, $14, $15, $16, $17, $18, $19, $20
+       FROM next_version
+       RETURNING id
+     )
+     UPDATE payroll_records
+     SET current_snapshot_id = inserted.id,
+         updated_at = NOW()
+     FROM inserted
+     WHERE payroll_records.id = $1
+     RETURNING inserted.id`,
+    [
+      context.payrollRecordId,
+      context.payrollPeriodId,
+      record.employeeId,
+      context.payrollFrequency,
+      dateOnly(context.periodStart),
+      dateOnly(context.periodEnd),
+      JSON.stringify(attendanceResult.rows[0] ?? {}),
+      JSON.stringify(record.leaveAdjustmentIds),
+      JSON.stringify(loanDeductionIds),
+      JSON.stringify(record.statutoryRuleVersions),
+      JSON.stringify(earningsBreakdown),
+      JSON.stringify(deductionsBreakdown),
+      JSON.stringify(employerBreakdown),
+      record.taxableIncome,
+      record.nonTaxableEarnings,
+      record.grossPay,
+      record.totalDeductions,
       record.netPay,
+      context.computedBy ?? null,
+      snapshotHash,
     ]
   )
   return result.rows[0].id
 }
 
-export async function processBatchPayroll(payrollPeriodId: string, db: Queryable = pool): Promise<{
+async function getLeavePayrollImpact(
+  db: Queryable,
+  params: {
+    employeeId: string
+    payrollPeriodId: string
+    periodStart: Date | string
+    periodEnd: Date | string
+    paidLeaveAttendanceDays: number
+    dailyRate: number
+  }
+) {
+  const directLeaveResult = await db.query(
+    `SELECT COALESCE(SUM(
+              CASE
+                WHEN COALESCE(lr.unpaid_days, 0) <= 0 THEN 0
+                ELSE LEAST(
+                  COALESCE(lr.unpaid_days, 0),
+                  GREATEST(0, (LEAST(lr.end_date, $3::date) - GREATEST(lr.start_date, $2::date) + 1))::numeric
+                )
+              END
+            ), 0) AS unpaid_leave_days
+     FROM leave_requests lr
+     WHERE lr.employee_id = $1
+       AND lr.status = 'approved'
+       AND lr.start_date <= $3::date
+       AND lr.end_date >= $2::date
+       AND NOT EXISTS (
+         SELECT 1
+         FROM payroll_leave_adjustments pla
+         WHERE pla.leave_request_id = lr.id
+           AND pla.status IN ('pending', 'applied')
+       )`,
+    [params.employeeId, dateOnly(params.periodStart), dateOnly(params.periodEnd)]
+  )
+
+  const adjustmentsResult = await db.query(
+    `SELECT pla.id, pla.leave_request_id, pla.adjustment_type, pla.days, pla.amount,
+            pla.description, pla.status
+     FROM payroll_leave_adjustments pla
+     WHERE pla.employee_id = $1
+       AND (
+         pla.status = 'pending'
+         OR (pla.status = 'applied' AND pla.payroll_period_id = $2)
+       )
+       AND (pla.payroll_period_id = $2 OR pla.payroll_period_id IS NULL)
+     ORDER BY pla.created_at`,
+    [params.employeeId, params.payrollPeriodId]
+  )
+
+  const adjustmentItems = adjustmentsResult.rows.map((row) => ({
+    id: row.id,
+    leaveRequestId: row.leave_request_id,
+    type: row.adjustment_type,
+    days: toNumber(row.days),
+    amount: toNumber(row.amount),
+    status: row.status,
+    description: row.description,
+  }))
+  const adjustmentDeduction = adjustmentItems
+    .filter((item) => String(item.type).includes('DEDUCTION'))
+    .reduce((sum, item) => sum + Math.abs(item.amount), 0)
+  const adjustmentEarnings = adjustmentItems
+    .filter((item) => !String(item.type).includes('DEDUCTION'))
+    .reduce((sum, item) => sum + Math.max(0, item.amount), 0)
+  const adjustmentUnpaidDays = adjustmentItems
+    .filter((item) => String(item.type).includes('UNPAID'))
+    .reduce((sum, item) => sum + item.days, 0)
+  const directUnpaidDays = toNumber(directLeaveResult.rows[0]?.unpaid_leave_days)
+  const unpaidLeaveDays = round2(directUnpaidDays + adjustmentUnpaidDays)
+  const paidLeaveDays = Math.max(0, params.paidLeaveAttendanceDays - unpaidLeaveDays)
+
+  return {
+    paidLeaveDays,
+    unpaidLeaveDays,
+    adjustmentDeduction: round2(adjustmentDeduction),
+    adjustmentEarnings: round2(adjustmentEarnings),
+    adjustmentUnpaidDays: round2(adjustmentUnpaidDays),
+    adjustmentIds: adjustmentItems.map((item) => String(item.id)),
+    adjustmentItems,
+    paidLeaveAmount: round2(paidLeaveDays * params.dailyRate),
+  }
+}
+
+async function buildLoanDeductions(
+  db: Queryable,
+  params: {
+    employeeId: string
+    payrollPeriodId: string
+    payFrequency: PayFrequency
+    periodStart: Date | string
+    periodEnd: Date | string
+    deductionDate: Date | string
+    expectedWorkDays: number
+    workDaysPerMonth: number
+  }
+): Promise<PayrollLoanDeductionDraft[]> {
+  const factor = allocationFactorForFrequency(
+    params.payFrequency,
+    params.expectedWorkDays,
+    params.workDaysPerMonth
+  )
+  const result = await db.query(
+    `SELECT l.id, l.monthly_payment, l.balance, l.start_date, l.end_date,
+            COALESCE((
+              SELECT SUM(pld.deducted_amount)
+              FROM payroll_loan_deductions pld
+              WHERE pld.loan_id = l.id
+                AND pld.payroll_period_id <> $2
+            ), 0) AS previous_deductions
+     FROM loans l
+     WHERE l.employee_id = $1
+       AND l.is_active = true
+       AND l.status = 'active'
+       AND l.start_date <= $4::date
+       AND (l.end_date IS NULL OR l.end_date >= $3::date)
+       AND COALESCE(l.balance, 0) > 0
+     ORDER BY l.start_date, l.created_at`,
+    [params.employeeId, params.payrollPeriodId, dateOnly(params.periodStart), dateOnly(params.periodEnd)]
+  )
+
+  return result.rows.flatMap((loan) => {
+    const scheduledAmount = round2(toNumber(loan.monthly_payment) * factor)
+    const remainingBefore = round2(Math.max(0, toNumber(loan.balance)))
+    const deductedAmount = round2(Math.min(scheduledAmount, remainingBefore))
+    if (deductedAmount <= 0) return []
+
+    return [{
+      employeeId: params.employeeId,
+      loanId: loan.id,
+      payrollPeriodId: params.payrollPeriodId,
+      scheduledAmount,
+      deductedAmount,
+      remainingBalanceBefore: remainingBefore,
+      remainingBalanceAfter: round2(remainingBefore - deductedAmount),
+      deductionDate: dateOnly(params.deductionDate),
+    }]
+  })
+}
+
+async function savePayrollLoanDeductions(
+  db: Queryable,
+  payrollRecordId: string,
+  items: PayrollLoanDeductionDraft[]
+): Promise<void> {
+  await db.query(`DELETE FROM payroll_loan_deductions WHERE payroll_record_id = $1`, [payrollRecordId])
+
+  for (const item of items) {
+    await db.query(
+      `INSERT INTO payroll_loan_deductions (
+         payroll_record_id, employee_id, loan_id, payroll_period_id,
+         scheduled_amount, deducted_amount, remaining_balance_before,
+         remaining_balance_after, deduction_date
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (loan_id, payroll_period_id)
+       DO UPDATE SET
+         payroll_record_id = EXCLUDED.payroll_record_id,
+         scheduled_amount = EXCLUDED.scheduled_amount,
+         deducted_amount = EXCLUDED.deducted_amount,
+         remaining_balance_before = EXCLUDED.remaining_balance_before,
+         remaining_balance_after = EXCLUDED.remaining_balance_after,
+         deduction_date = EXCLUDED.deduction_date,
+         updated_at = NOW()`,
+      [
+        payrollRecordId,
+        item.employeeId,
+        item.loanId,
+        item.payrollPeriodId,
+        item.scheduledAmount,
+        item.deductedAmount,
+        item.remainingBalanceBefore,
+        item.remainingBalanceAfter,
+        item.deductionDate,
+      ]
+    )
+  }
+}
+
+async function markLeaveAdjustmentsApplied(
+  db: Queryable,
+  params: {
+    payrollRecordId: string
+    payrollPeriodId: string
+    adjustmentIds: string[]
+  }
+): Promise<void> {
+  if (!params.adjustmentIds.length) return
+  await db.query(
+    `UPDATE payroll_leave_adjustments
+     SET payroll_period_id = $1,
+         payroll_record_id = $2,
+         status = 'applied',
+         applied_at = COALESCE(applied_at, NOW()),
+         updated_at = NOW()
+     WHERE id = ANY($3::uuid[])`,
+    [params.payrollPeriodId, params.payrollRecordId, params.adjustmentIds]
+  )
+}
+
+export async function processBatchPayroll(
+  payrollPeriodId: string,
+  db: Queryable = pool,
+  options: { computedBy?: string } = {}
+): Promise<{
   processed: number
   errors: Array<{ employeeId: string; error: string }>
 }> {
   const period = await db.query(
-    `SELECT start_date, end_date FROM payroll_periods WHERE id = $1`,
+    `SELECT start_date, end_date, pay_date, pay_frequency FROM payroll_periods WHERE id = $1`,
     [payrollPeriodId]
   )
   if (!period.rows[0]) {
     throw createError('Payroll period not found', 404)
   }
 
-  // Fetch all active employees for this period
+  const periodRow = period.rows[0]
+  const periodStart = new Date(periodRow.start_date)
+  const periodEnd = new Date(periodRow.end_date)
+  const payFrequency = periodRow.pay_frequency as PayFrequency
+  const totalWorkDays = countWorkingDays(periodStart, periodEnd)
+
+  // Fetch all active employees and summarize backend-owned payroll inputs.
   const employees = await db.query(
     `SELECT e.id, e.basic_salary, e.work_days_per_month, e.work_hours_per_day,
+            COALESCE(SUM(CASE WHEN a.status IN ('present', 'late', 'half_day') THEN 1 ELSE 0 END), 0) AS days_worked,
+            COALESCE(SUM(CASE WHEN a.status = 'on_leave' THEN 1 ELSE 0 END), 0) AS leave_attendance_days,
             COALESCE(SUM(CASE WHEN a.status = 'absent' THEN 1 ELSE 0 END), 0) AS absence_days,
             COALESCE(SUM(CASE WHEN a.status = 'late' THEN a.late_minutes ELSE 0 END), 0) AS late_mins,
             COALESCE(SUM(a.overtime_hours), 0) AS overtime_hours,
@@ -231,7 +770,7 @@ export async function processBatchPayroll(payrollPeriodId: string, db: Queryable
               FROM offset_credits oc
               WHERE oc.employee_id = e.id AND oc.status = 'approved'
             ), 0) AS offset_balance_minutes,
-            (SELECT COALESCE(SUM(monthly_payment), 0) FROM loans l WHERE l.employee_id = e.id AND l.is_active = true) AS loan_deductions
+            0 AS unpaid_leave_days
      FROM employees e
      LEFT JOIN payroll_periods pp ON pp.id = $1
      LEFT JOIN attendance a ON a.employee_id = e.id
@@ -246,18 +785,42 @@ export async function processBatchPayroll(payrollPeriodId: string, db: Queryable
 
   for (const emp of employees.rows) {
     try {
-      const workDaysPerMonth = emp.work_days_per_month ?? 22
-      const totalWorkDays = period.rows[0]
-        ? countWorkingDays(new Date(period.rows[0].start_date), new Date(period.rows[0].end_date))
-        : workDaysPerMonth
-      const daysWorked = Math.max(0, totalWorkDays - Number(emp.absence_days))
+      const workDaysPerMonth = Number(emp.work_days_per_month ?? 22) || 22
+      const dailyRate = getDailyRate(Number(emp.basic_salary), workDaysPerMonth)
+      const leaveImpact = await getLeavePayrollImpact(db, {
+        employeeId: emp.id,
+        payrollPeriodId,
+        periodStart: periodRow.start_date,
+        periodEnd: periodRow.end_date,
+        paidLeaveAttendanceDays: Number(emp.leave_attendance_days),
+        dailyRate,
+      })
+      const loanDeductionItems = await buildLoanDeductions(db, {
+        employeeId: emp.id,
+        payrollPeriodId,
+        payFrequency,
+        periodStart: periodRow.start_date,
+        periodEnd: periodRow.end_date,
+        deductionDate: periodRow.pay_date ?? periodRow.end_date,
+        expectedWorkDays: totalWorkDays,
+        workDaysPerMonth,
+      })
+      const loanDeductions = round2(loanDeductionItems.reduce((sum, item) => sum + item.deductedAmount, 0))
+      const unpaidLeaveDays = Math.min(totalWorkDays, leaveImpact.unpaidLeaveDays)
+      const paidLeaveDays = Math.max(0, leaveImpact.paidLeaveDays)
+      const daysWorked = Number(emp.days_worked)
 
-      const result = computePayroll({
+      const result = await computePayroll({
         employeeId: emp.id,
         payrollPeriodId,
         basicSalary: Number(emp.basic_salary),
+        payFrequency,
+        periodEndDate: periodRow.end_date,
+        expectedWorkDays: totalWorkDays,
         daysWorked,
         absenceDays: Number(emp.absence_days),
+        paidLeaveDays,
+        unpaidLeaveDays,
         lateMins: Number(emp.late_mins),
         overtimeHours: Number(emp.overtime_hours),
         holidayHours: Number(emp.holiday_hours),
@@ -268,14 +831,36 @@ export async function processBatchPayroll(payrollPeriodId: string, db: Queryable
         undertimeMinutes: Number(emp.undertime_minutes),
         offsetBalanceMinutes: Number(emp.offset_balance_minutes),
         allowances: 0,
+        nonTaxableEarnings: 0,
+        preTaxDeductions: 0,
+        leaveAdjustmentDeductions: leaveImpact.adjustmentDeduction,
+        leaveAdjustmentEarnings: leaveImpact.adjustmentEarnings,
+        leaveAdjustmentUnpaidDays: leaveImpact.adjustmentUnpaidDays,
+        leaveAdjustmentIds: leaveImpact.adjustmentIds,
+        leaveAdjustmentItems: leaveImpact.adjustmentItems,
         otherEarnings: 0,
-        loanDeductions: Number(emp.loan_deductions),
+        loanDeductions,
+        loanDeductionItems,
         otherDeductions: 0,
         workDaysPerMonth,
         workHoursPerDay: emp.work_hours_per_day ?? 8,
-      })
+      }, db)
 
-      await savePayrollRecord(result, db)
+      const payrollRecordId = await savePayrollRecord(result, db)
+      await savePayrollLoanDeductions(db, payrollRecordId, result.loanDeductionItems)
+      await markLeaveAdjustmentsApplied(db, {
+        payrollRecordId,
+        payrollPeriodId,
+        adjustmentIds: result.leaveAdjustmentIds,
+      })
+      await createPayrollCalculationSnapshot(result, {
+        payrollRecordId,
+        payrollPeriodId,
+        payrollFrequency: payFrequency,
+        periodStart: periodRow.start_date,
+        periodEnd: periodRow.end_date,
+        computedBy: options.computedBy,
+      }, db)
       processed++
     } catch (err) {
       errors.push({ employeeId: emp.id, error: (err as Error).message })

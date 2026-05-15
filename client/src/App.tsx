@@ -19,7 +19,6 @@ import AttendanceRequestPage from './pages/admin/attendance/AttendanceRequestPag
 import AttendanceSummaryPage from './pages/admin/attendance/AttendanceSummaryPage'
 import LeaveStatusPage from './pages/admin/leave/LeaveStatusPage'
 import LeaveCalendarPage from './pages/admin/leave/LeaveCalendarPage'
-import RolesPage from './pages/admin/administration/RolesPage'
 import DepartmentsPage from './pages/admin/administration/DepartmentsPage'
 import ShiftsPage from './pages/admin/administration/ShiftsPage'
 import HolidaysPage from './pages/admin/administration/HolidaysPage'
@@ -36,18 +35,45 @@ import AttendancePage from './pages/employee/AttendancePage'
 import EmployeeLeavePage from './pages/employee/LeavePage'
 import ProfilePage from './pages/employee/ProfilePage'
 
+const fullAdminRoles = new Set(['admin', 'super_admin'])
+const adminWorkspaceRoles = new Set([
+  'admin',
+  'super_admin',
+  'payroll_preparer',
+  'payroll_approver',
+  'payroll_releaser',
+  'auditor',
+])
+
+function defaultPathForRole(role: string | undefined) {
+  if (role === 'employee') return '/employee/dashboard'
+  if (fullAdminRoles.has(role ?? '')) return '/admin/dashboard'
+  if (adminWorkspaceRoles.has(role ?? '')) return '/admin/payroll'
+  return '/login'
+}
+
 function ProtectedAdminRoute({ children }: { children: React.ReactNode }) {
   const { user, isAuthenticated } = useAuthStore()
   if (!isAuthenticated) return <Navigate to="/login" replace />
-  if (user?.role !== 'admin') {
-    return <Navigate to="/employee/dashboard" replace />
+  if (!adminWorkspaceRoles.has(user?.role ?? '')) {
+    return <Navigate to={defaultPathForRole(user?.role)} replace />
+  }
+  return <>{children}</>
+}
+
+function ProtectedFullAdminRoute({ children }: { children: React.ReactNode }) {
+  const { user, isAuthenticated } = useAuthStore()
+  if (!isAuthenticated) return <Navigate to="/login" replace />
+  if (!fullAdminRoles.has(user?.role ?? '')) {
+    return <Navigate to={defaultPathForRole(user?.role)} replace />
   }
   return <>{children}</>
 }
 
 function ProtectedEmployeeRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated } = useAuthStore()
+  const { user, isAuthenticated } = useAuthStore()
   if (!isAuthenticated) return <Navigate to="/login" replace />
+  if (user?.role !== 'employee') return <Navigate to={defaultPathForRole(user?.role)} replace />
   return <>{children}</>
 }
 
@@ -62,7 +88,7 @@ export default function App() {
           path="/login"
           element={
             isAuthenticated
-              ? <Navigate to={user?.role === 'employee' ? '/employee/dashboard' : '/admin/dashboard'} replace />
+              ? <Navigate to={defaultPathForRole(user?.role)} replace />
               : <LoginPage />
           }
         />
@@ -77,32 +103,31 @@ export default function App() {
             </ProtectedAdminRoute>
           }
         >
-          <Route index element={<Navigate to="dashboard" replace />} />
-          <Route path="dashboard" element={<AdminDashboardPage />} />
+          <Route index element={<Navigate to={defaultPathForRole(user?.role).replace('/admin/', '')} replace />} />
+          <Route path="dashboard" element={<ProtectedFullAdminRoute><AdminDashboardPage /></ProtectedFullAdminRoute>} />
 
-          <Route path="employees" element={<EmployeeListPage />} />
-          <Route path="employees/:id" element={<EmployeeDetailPage />} />
+          <Route path="employees" element={<ProtectedFullAdminRoute><EmployeeListPage /></ProtectedFullAdminRoute>} />
+          <Route path="employees/:id" element={<ProtectedFullAdminRoute><EmployeeDetailPage /></ProtectedFullAdminRoute>} />
 
           <Route path="payroll" element={<PayrollPage />} />
 
-          <Route path="attendance/daily" element={<DailyLogPage />} />
-          <Route path="attendance/requests" element={<AttendanceRequestPage />} />
-          <Route path="attendance/summary" element={<AttendanceSummaryPage />} />
+          <Route path="attendance/daily" element={<ProtectedFullAdminRoute><DailyLogPage /></ProtectedFullAdminRoute>} />
+          <Route path="attendance/requests" element={<ProtectedFullAdminRoute><AttendanceRequestPage /></ProtectedFullAdminRoute>} />
+          <Route path="attendance/summary" element={<ProtectedFullAdminRoute><AttendanceSummaryPage /></ProtectedFullAdminRoute>} />
 
-          <Route path="leave/status" element={<LeaveStatusPage />} />
+          <Route path="leave/status" element={<ProtectedFullAdminRoute><LeaveStatusPage /></ProtectedFullAdminRoute>} />
           <Route path="leave/requests" element={<Navigate to="/admin/leave/status" replace />} />
-          <Route path="leave/calendar" element={<LeaveCalendarPage />} />
+          <Route path="leave/calendar" element={<ProtectedFullAdminRoute><LeaveCalendarPage /></ProtectedFullAdminRoute>} />
 
-          <Route path="administration/roles" element={<RolesPage />} />
-          <Route path="administration/departments" element={<DepartmentsPage />} />
-          <Route path="administration/shifts" element={<ShiftsPage />} />
-          <Route path="administration/holidays" element={<HolidaysPage />} />
-          <Route path="administration/announcements" element={<AnnouncementsPage />} />
+          <Route path="administration/departments" element={<ProtectedFullAdminRoute><DepartmentsPage /></ProtectedFullAdminRoute>} />
+          <Route path="administration/shifts" element={<ProtectedFullAdminRoute><ShiftsPage /></ProtectedFullAdminRoute>} />
+          <Route path="administration/holidays" element={<ProtectedFullAdminRoute><HolidaysPage /></ProtectedFullAdminRoute>} />
+          <Route path="administration/announcements" element={<ProtectedFullAdminRoute><AnnouncementsPage /></ProtectedFullAdminRoute>} />
 
-          <Route path="settings/general" element={<GeneralSettingsPage />} />
-          <Route path="settings/payroll" element={<PayrollSettingsPage />} />
-          <Route path="settings/leave" element={<LeaveSettingsPage />} />
-          <Route path="settings/attendance" element={<AttendanceSettingsPage />} />
+          <Route path="settings/general" element={<ProtectedFullAdminRoute><GeneralSettingsPage /></ProtectedFullAdminRoute>} />
+          <Route path="settings/payroll" element={<ProtectedFullAdminRoute><PayrollSettingsPage /></ProtectedFullAdminRoute>} />
+          <Route path="settings/leave" element={<ProtectedFullAdminRoute><LeaveSettingsPage /></ProtectedFullAdminRoute>} />
+          <Route path="settings/attendance" element={<ProtectedFullAdminRoute><AttendanceSettingsPage /></ProtectedFullAdminRoute>} />
         </Route>
 
         {/* Employee routes */}
@@ -123,7 +148,7 @@ export default function App() {
         </Route>
 
         {/* Fallback */}
-        <Route path="/" element={<Navigate to={isAuthenticated ? (user?.role === 'employee' ? '/employee/dashboard' : '/admin/dashboard') : '/login'} replace />} />
+        <Route path="/" element={<Navigate to={isAuthenticated ? defaultPathForRole(user?.role) : '/login'} replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
