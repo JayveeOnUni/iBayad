@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
-import { Plus, Edit2, Clock, Power } from 'lucide-react'
+import { Plus, Edit2, Clock, Power, Trash2, Loader2 } from 'lucide-react'
 import Card from '../../../components/ui/Card'
 import Button from '../../../components/ui/Button'
 import Badge from '../../../components/ui/Badge'
-import Modal from '../../../components/ui/Modal'
+import Modal, { ConfirmModal } from '../../../components/ui/Modal'
 import Input from '../../../components/ui/Input'
 import { EmptyState, FeedbackMessage } from '../../../components/ui/Page'
 import { shiftService, type ShiftPayload } from '../../../services/referenceDataService'
@@ -19,8 +19,23 @@ interface ShiftForm {
 
 type ShiftFormErrors = Partial<Record<keyof ShiftForm, string>>
 type PageMessage = { variant: 'info' | 'success' | 'warning' | 'danger'; text: string }
+type ActionTone = 'neutral' | 'success' | 'warning' | 'danger'
+
+interface ShiftActionButtonProps {
+  label: string
+  icon: React.ReactNode
+  tone?: ActionTone
+  isLoading?: boolean
+  onClick: () => void
+}
 
 const timePattern = /^([01]\d|2[0-3]):([0-5]\d)$/
+const actionToneClasses: Record<ActionTone, string> = {
+  neutral: 'text-neutral-70 hover:bg-white hover:text-ink hover:shadow-sm focus-visible:ring-brand-200',
+  success: 'text-success hover:bg-success-muted hover:text-success-hover focus-visible:ring-success-border',
+  warning: 'text-warning hover:bg-warning-muted hover:text-warning focus-visible:ring-warning-border',
+  danger: 'text-danger hover:bg-danger-muted hover:text-danger-hover focus-visible:ring-danger-border',
+}
 
 const defaultForm: ShiftForm = {
   name: '',
@@ -39,6 +54,41 @@ function formatShiftTime(time: string): string {
 
 function formatHours(hours: number): string {
   return Number.isInteger(hours) ? String(hours) : hours.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')
+}
+
+function isRegularShift(shift: Shift): boolean {
+  return shift.name.trim().toLowerCase() === 'regular shift'
+}
+
+function ShiftActionButton({
+  label,
+  icon,
+  tone = 'neutral',
+  isLoading = false,
+  onClick,
+}: ShiftActionButtonProps) {
+  return (
+    <span className="group relative inline-flex">
+      <button
+        type="button"
+        aria-label={label}
+        title={label}
+        disabled={isLoading}
+        onClick={onClick}
+        className={[
+          'inline-flex h-8 w-8 items-center justify-center rounded-md',
+          'transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1',
+          'disabled:cursor-not-allowed disabled:opacity-60',
+          actionToneClasses[tone],
+        ].join(' ')}
+      >
+        {isLoading ? <Loader2 className="animate-spin" size={15} /> : icon}
+      </button>
+      <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2 rounded-md bg-ink px-2 py-1 text-xs font-medium text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+        {label}
+      </span>
+    </span>
+  )
 }
 
 function timeToMinutes(time: string): number {
@@ -111,6 +161,8 @@ export default function ShiftsPage() {
   const [message, setMessage] = useState<PageMessage | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [togglingShiftId, setTogglingShiftId] = useState<string | null>(null)
+  const [shiftPendingDelete, setShiftPendingDelete] = useState<Shift | null>(null)
+  const [deletingShiftId, setDeletingShiftId] = useState<string | null>(null)
 
   useEffect(() => {
     let isMounted = true
@@ -189,6 +241,35 @@ export default function ShiftsPage() {
     }
   }
 
+  const openDeleteModal = (shift: Shift) => {
+    if (isRegularShift(shift)) return
+    setShiftPendingDelete(shift)
+    setMessage(null)
+  }
+
+  const deleteShift = async () => {
+    if (!shiftPendingDelete || isRegularShift(shiftPendingDelete)) return
+
+    setDeletingShiftId(shiftPendingDelete.id)
+    setMessage(null)
+
+    try {
+      const result = await shiftService.delete(shiftPendingDelete.id)
+      const reassignedText = result.reassignedEmployees === 1
+        ? '1 employee was reassigned to Regular Shift.'
+        : `${result.reassignedEmployees} employees were reassigned to Regular Shift.`
+
+      setShifts((current) => current.filter((item) => item.id !== result.deletedShiftId))
+      setMessage({ variant: 'success', text: `Shift deleted. ${reassignedText}` })
+      setShiftPendingDelete(null)
+    } catch (err) {
+      setMessage({ variant: 'danger', text: err instanceof Error ? err.message : 'Unable to delete shift.' })
+      setShiftPendingDelete(null)
+    } finally {
+      setDeletingShiftId(null)
+    }
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
@@ -221,22 +302,33 @@ export default function ShiftsPage() {
                   </div>
                   <div className="min-w-0">
                     <h3 className="text-sm font-semibold text-ink truncate">{shift.name}</h3>
-                    <Badge variant={shift.isActive === false ? 'neutral' : 'success'} size="sm" dot>
+                    <Badge variant={shift.isActive === false ? 'danger' : 'success'} size="sm" dot>
                       {shift.isActive === false ? 'Inactive' : 'Active'}
                     </Badge>
                   </div>
                 </div>
-                <div className="flex flex-shrink-0 gap-1">
-                  <Button size="xs" variant="ghost" leftIcon={<Edit2 size={12} />} onClick={() => openShiftModal(shift)}>Edit</Button>
-                  <Button
-                    size="xs"
-                    variant="ghost"
-                    leftIcon={<Power size={12} />}
+                <div className="flex flex-shrink-0 items-center gap-1 rounded-md border border-border bg-neutral-20 p-1">
+                  <ShiftActionButton
+                    label="Edit shift"
+                    icon={<Edit2 size={15} />}
+                    onClick={() => openShiftModal(shift)}
+                  />
+                  <ShiftActionButton
+                    label={shift.isActive === false ? 'Activate shift' : 'Deactivate shift'}
+                    icon={<Power size={15} />}
+                    tone={shift.isActive === false ? 'success' : 'warning'}
                     isLoading={togglingShiftId === shift.id}
                     onClick={() => toggleShift(shift)}
-                  >
-                    {shift.isActive === false ? 'Activate' : 'Deactivate'}
-                  </Button>
+                  />
+                  {!isRegularShift(shift) && (
+                    <ShiftActionButton
+                      label="Delete shift"
+                      icon={<Trash2 size={15} />}
+                      tone="danger"
+                      isLoading={deletingShiftId === shift.id}
+                      onClick={() => openDeleteModal(shift)}
+                    />
+                  )}
                 </div>
               </div>
 
@@ -283,6 +375,23 @@ export default function ShiftsPage() {
           <Input label="Working Hours / Day" type="number" min={0.25} max={24} step={0.25} value={form.workingHoursPerDay} error={fieldErrors.workingHoursPerDay} onChange={(e) => setForm((current) => ({ ...current, workingHoursPerDay: e.target.value }))} required />
         </div>
       </Modal>
+
+      <ConfirmModal
+        isOpen={Boolean(shiftPendingDelete)}
+        onClose={() => {
+          if (!deletingShiftId) setShiftPendingDelete(null)
+        }}
+        onConfirm={deleteShift}
+        title="Delete Shift"
+        message={
+          shiftPendingDelete
+            ? `Delete ${shiftPendingDelete.name}? Any assigned employees will be reassigned to Regular Shift before this shift is deleted. This action cannot be undone.`
+            : ''
+        }
+        confirmLabel="Delete Shift"
+        isLoading={Boolean(deletingShiftId)}
+        variant="danger"
+      />
     </div>
   )
 }

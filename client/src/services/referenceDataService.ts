@@ -34,6 +34,11 @@ export interface ShiftPayload {
   workingHoursPerDay: number
 }
 
+export interface DeleteShiftResult {
+  deletedShiftId: string
+  reassignedEmployees: number
+}
+
 export const departmentService = {
   getActive: () =>
     api.get<ApiResponse<ActiveDepartmentLookup[]>>('/admin/departments/active')
@@ -61,5 +66,8 @@ export const shiftService = {
       .then((res) => res.data),
   toggleActive: (id: string) =>
     api.patch<ApiResponse<Shift>>(`/admin/shifts/${id}/toggle-active`)
+      .then((res) => res.data),
+  delete: (id: string) =>
+    api.delete<ApiResponse<DeleteShiftResult>>(`/admin/shifts/${id}`)
       .then((res) => res.data),
 }

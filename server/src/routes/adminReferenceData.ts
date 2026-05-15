@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import {
   createWorkShift,
+  deleteWorkShift,
   listActiveDepartments,
   listActivePositions,
   listActiveShifts,
@@ -21,5 +22,6 @@ router.get('/shifts', listShifts)
 router.post('/shifts', createWorkShift)
 router.put('/shifts/:id', updateWorkShift)
 router.patch('/shifts/:id/toggle-active', toggleWorkShiftActive)
+router.delete('/shifts/:id', deleteWorkShift)
 
 export default router

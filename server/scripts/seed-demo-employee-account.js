@@ -191,9 +191,10 @@ async function ensureRegularShift(client) {
   const existing = await client.query(
     `SELECT id
      FROM work_shifts
-     WHERE name = 'Regular Shift'
+     WHERE LOWER(TRIM(name)) = LOWER(TRIM($1))
      ORDER BY is_active DESC, created_at
-     LIMIT 1`
+     LIMIT 1`,
+    ['Regular Shift']
   )
 
   if (existing.rows[0]) {

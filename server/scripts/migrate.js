@@ -67,6 +67,10 @@ const migrations = [
     name: '015_employee_work_hours_precision',
     file: 'src/db/add-employee-work-hours-precision.sql',
   },
+  {
+    name: '016_consolidate_regular_shift_duplicates',
+    file: 'src/db/consolidate-regular-shift-duplicates.sql',
+  },
 ]
 
 function resolveSqlFile(relativeFile) {

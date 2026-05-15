@@ -46,6 +46,13 @@ export interface ShiftMutationInput {
   workingHoursPerDay: number
 }
 
+export type DeleteShiftResult =
+  | { status: 'deleted'; deletedShiftId: string; reassignedEmployees: number }
+  | { status: 'not_found' }
+  | { status: 'regular_shift' }
+  | { status: 'missing_regular_shift' }
+  | { status: 'has_attendance_history' }
+
 interface ShiftRow {
   id: string
   name: string
@@ -252,4 +259,87 @@ export async function toggleShiftActive(id: string): Promise<AdminShift | null> 
   )
 
   return result.rows[0] ? mapShiftRow(result.rows[0]) : null
+}
+
+export async function deleteShift(id: string): Promise<DeleteShiftResult> {
+  const client = await pool.connect()
+
+  try {
+    await client.query('BEGIN')
+
+    const targetResult = await client.query<{ id: string; name: string }>(
+      `SELECT id, name
+       FROM work_shifts
+       WHERE id = $1
+       FOR UPDATE`,
+      [id]
+    )
+
+    const targetShift = targetResult.rows[0]
+    if (!targetShift) {
+      await client.query('ROLLBACK')
+      return { status: 'not_found' }
+    }
+
+    if (targetShift.name.trim().toLowerCase() === 'regular shift') {
+      await client.query('ROLLBACK')
+      return { status: 'regular_shift' }
+    }
+
+    const regularShiftResult = await client.query<{ id: string }>(
+      `SELECT id
+       FROM work_shifts
+       WHERE LOWER(TRIM(name)) = LOWER($1)
+       ORDER BY created_at ASC
+       LIMIT 1
+       FOR UPDATE`,
+      ['Regular Shift']
+    )
+
+    const regularShift = regularShiftResult.rows[0]
+    if (!regularShift) {
+      await client.query('ROLLBACK')
+      return { status: 'missing_regular_shift' }
+    }
+
+    if (regularShift.id === targetShift.id) {
+      await client.query('ROLLBACK')
+      return { status: 'regular_shift' }
+    }
+
+    const attendanceResult = await client.query(
+      `SELECT 1
+       FROM attendance
+       WHERE scheduled_shift_id = $1
+       LIMIT 1`,
+      [id]
+    )
+
+    if (attendanceResult.rowCount && attendanceResult.rowCount > 0) {
+      await client.query('ROLLBACK')
+      return { status: 'has_attendance_history' }
+    }
+
+    const reassignedResult = await client.query(
+      `UPDATE employees
+       SET shift_id = $2,
+           updated_at = NOW()
+       WHERE shift_id = $1`,
+      [id, regularShift.id]
+    )
+
+    await client.query('DELETE FROM work_shifts WHERE id = $1', [id])
+    await client.query('COMMIT')
+
+    return {
+      status: 'deleted',
+      deletedShiftId: id,
+      reassignedEmployees: reassignedResult.rowCount ?? 0,
+    }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
 }

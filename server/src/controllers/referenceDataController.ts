@@ -2,6 +2,7 @@ import { Request, Response } from 'express'
 import { asyncHandler, createError } from '../middleware/errorHandler'
 import {
   createShift,
+  deleteShift,
   getActiveDepartments,
   getActivePositions,
   getActiveShifts,
@@ -169,5 +170,28 @@ export const toggleWorkShiftActive = asyncHandler(async (req: Request, res: Resp
     success: true,
     data,
     message: `Shift ${data.isActive ? 'activated' : 'deactivated'}.`,
+  })
+})
+
+export const deleteWorkShift = asyncHandler(async (req: Request, res: Response) => {
+  validateUuid(req.params.id, 'Shift ID')
+  const result = await deleteShift(req.params.id)
+
+  if (result.status === 'not_found') throw createError('Shift not found', 404)
+  if (result.status === 'regular_shift') throw createError('Regular Shift cannot be deleted.', 400)
+  if (result.status === 'missing_regular_shift') {
+    throw createError('Regular Shift was not found. No shift was deleted.', 409)
+  }
+  if (result.status === 'has_attendance_history') {
+    throw createError('This shift has attendance history and cannot be deleted. Deactivate it instead.', 409)
+  }
+
+  res.json({
+    success: true,
+    data: {
+      deletedShiftId: result.deletedShiftId,
+      reassignedEmployees: result.reassignedEmployees,
+    },
+    message: 'Shift deleted.',
   })
 })

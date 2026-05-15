@@ -136,8 +136,12 @@ SET title = EXCLUDED.title,
     updated_at = NOW();
 
 INSERT INTO work_shifts (name, start_time, end_time, break_minutes, work_hours, is_active)
-VALUES ('Regular Shift', '08:00', '17:00', 60, 8, true)
-ON CONFLICT DO NOTHING;
+SELECT 'Regular Shift', '08:00', '17:00', 60, 8, true
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM work_shifts
+  WHERE LOWER(TRIM(name)) = 'regular shift'
+);
 
 UPDATE work_shifts
 SET start_time = '08:00',
@@ -146,7 +150,7 @@ SET start_time = '08:00',
     work_hours = 8,
     is_active = true,
     updated_at = NOW()
-WHERE name = 'Regular Shift';
+WHERE LOWER(TRIM(name)) = 'regular shift';
 
 -- Fake employee profile. No real employee, bank, or government details are used.
 INSERT INTO employees (
@@ -176,7 +180,7 @@ VALUES (
   '1605',
   (SELECT id FROM departments WHERE code = 'OPS'),
   (SELECT id FROM positions WHERE code = 'DEMO-PAYROLL'),
-  (SELECT id FROM work_shifts WHERE name = 'Regular Shift' LIMIT 1),
+  (SELECT id FROM work_shifts WHERE LOWER(TRIM(name)) = 'regular shift' ORDER BY created_at ASC NULLS LAST, id ASC LIMIT 1),
   'regular',
   'active',
   '2026-03-25',
