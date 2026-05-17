@@ -4,6 +4,7 @@ import { getDailyRate, getHourlyRate, countWorkingDays } from '../utils/dateHelp
 import { createError } from '../middleware/errorHandler'
 import type { Pool, PoolClient } from 'pg'
 import crypto from 'crypto'
+import { getPayrollPolicySettings } from './settingsService'
 
 type Queryable = Pool | PoolClient
 
@@ -41,6 +42,8 @@ export interface PayrollInput {
   otherDeductions: number
   workDaysPerMonth?: number
   workHoursPerDay?: number
+  regularHolidayRate?: number
+  nightDifferentialEnabled?: boolean
 }
 
 export interface PayrollResult {
@@ -156,8 +159,13 @@ function allocationFactorForFrequency(
 }
 
 export async function computePayroll(input: PayrollInput, db: Queryable = pool): Promise<PayrollResult> {
+  const policy = input.regularHolidayRate === undefined || input.nightDifferentialEnabled === undefined
+    ? await getPayrollPolicySettings()
+    : null
   const workDaysPerMonth = input.workDaysPerMonth ?? 22
   const workHoursPerDay = input.workHoursPerDay ?? 8
+  const regularHolidayRate = input.regularHolidayRate ?? policy?.regularHolidayRate ?? 2.0
+  const nightDifferentialEnabled = input.nightDifferentialEnabled ?? policy?.nightDifferentialEnabled ?? false
 
   const dailyRate = getDailyRate(input.basicSalary, workDaysPerMonth)
   const hourlyRate = getHourlyRate(dailyRate, workHoursPerDay)
@@ -171,8 +179,9 @@ export async function computePayroll(input: PayrollInput, db: Queryable = pool):
   // Earnings
   const regularPay = Math.round(dailyRate * expectedWorkDays * 100) / 100
   const overtimePay = Math.round(hourlyRate * input.overtimeHours * 1.25 * 100) / 100
-  const holidayPay = Math.round(hourlyRate * input.holidayHours * 2.0 * 100) / 100
-  const nightDiffPay = round2(hourlyRate * input.nightDiffHours * 0.10)
+  const holidayPay = round2(hourlyRate * input.holidayHours * regularHolidayRate)
+  const nightDiffHours = nightDifferentialEnabled ? Math.max(0, input.nightDiffHours) : 0
+  const nightDiffPay = round2(hourlyRate * nightDiffHours * 0.10)
 
   const paidLeaveAmount = round2(dailyRate * paidLeaveDays)
   const leaveAdjustmentEarnings = round2(input.leaveAdjustmentEarnings ?? 0)
@@ -237,6 +246,9 @@ export async function computePayroll(input: PayrollInput, db: Queryable = pool):
       holidayPay,
       nightDiffPay,
       paidLeaveAmount,
+      regularHolidayRate,
+      nightDifferentialEnabled,
+      nightDiffHours,
       taxableAllowances: input.allowances,
       otherTaxableEarnings: input.otherEarnings,
       nonTaxableEarnings,
@@ -750,6 +762,10 @@ export async function processBatchPayroll(
   const periodEnd = new Date(periodRow.end_date)
   const payFrequency = periodRow.pay_frequency as PayFrequency
   const totalWorkDays = countWorkingDays(periodStart, periodEnd)
+  const payrollPolicy = await getPayrollPolicySettings()
+  const nightDifferentialHoursExpression = payrollPolicy.nightDifferentialEnabled
+    ? 'COALESCE(SUM(a.night_diff_hours), 0)'
+    : '0'
 
   // Fetch all active employees and summarize backend-owned payroll inputs.
   const employees = await db.query(
@@ -760,7 +776,7 @@ export async function processBatchPayroll(
             COALESCE(SUM(CASE WHEN a.status = 'late' THEN a.late_minutes ELSE 0 END), 0) AS late_mins,
             COALESCE(SUM(a.overtime_hours), 0) AS overtime_hours,
             COALESCE(SUM(a.holiday_hours), 0) AS holiday_hours,
-            0 AS night_diff_hours,
+            ${nightDifferentialHoursExpression} AS night_diff_hours,
             COALESCE(SUM(a.excess_minutes), 0) AS excess_minutes,
             COALESCE(SUM(a.offset_earned_minutes), 0) AS offset_earned_minutes,
             COALESCE(SUM(a.offset_used_minutes), 0) AS offset_used_minutes,
@@ -844,6 +860,8 @@ export async function processBatchPayroll(
         otherDeductions: 0,
         workDaysPerMonth,
         workHoursPerDay: emp.work_hours_per_day ?? 8,
+        regularHolidayRate: payrollPolicy.regularHolidayRate,
+        nightDifferentialEnabled: payrollPolicy.nightDifferentialEnabled,
       }, db)
 
       const payrollRecordId = await savePayrollRecord(result, db)

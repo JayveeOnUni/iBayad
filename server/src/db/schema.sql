@@ -680,13 +680,21 @@ INSERT INTO system_settings (key, value, description) VALUES
   ('philhealth_employer_number', '"12-000000001-2"', 'PhilHealth employer number'),
   ('pagibig_employer_number', '"IBAY-0001"', 'Pag-IBIG employer ID'),
   ('pay_frequency', '"semi-monthly"', 'Default pay frequency'),
+  ('semi_monthly_cutoff_1', '15', 'First semi-monthly cutoff day'),
+  ('semi_monthly_cutoff_2', '31', 'Second semi-monthly cutoff day'),
+  ('semi_monthly_pay_day_1', '20', 'First semi-monthly pay day'),
+  ('semi_monthly_pay_day_2', '5', 'Second semi-monthly pay day'),
+  ('work_days_per_week', '5', 'Standard working days per week'),
   ('work_days_per_month', '22', 'Standard working days per month'),
   ('work_hours_per_day', '8', 'Standard working hours per day'),
   ('offset_credit_enabled', 'true', 'Convert excess attendance minutes into offset credits'),
   ('offset_requires_approval', 'true', 'Offset credits and usage require admin approval'),
   ('minimum_offset_credit_minutes', '1', 'Minimum excess minutes to create pending offset credit'),
+  ('regular_holiday_rate', '2.0', 'Regular holiday rate multiplier'),
+  ('special_holiday_rate', '1.3', 'Special holiday rate multiplier'),
   ('holiday_rate', '2.0', 'Regular holiday rate multiplier'),
-  ('night_differential_enabled', 'false', 'Night differential computation is disabled for active day shifts');
+  ('night_differential_enabled', 'false', 'Enable night differential pay from recorded night differential hours'),
+  ('thirteenth_month_enabled', 'true', 'Enable 13th month pay policy toggle');
 
 INSERT INTO role_permissions (role_name, permission_key) VALUES
   ('admin', 'payroll:*'),

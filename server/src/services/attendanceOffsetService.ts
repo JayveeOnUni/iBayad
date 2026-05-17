@@ -1,6 +1,7 @@
 import { PoolClient } from 'pg'
 import pool from '../utils/db'
 import { createError } from '../middleware/errorHandler'
+import { getPayrollPolicySettings } from './settingsService'
 
 export type OffsetReviewAction = 'approve' | 'reject'
 
@@ -275,6 +276,7 @@ export async function syncPendingOffsetCredit(attendanceId: string, actorUserId?
   const attendance = result.rows[0]
   if (!attendance) return
 
+  const policy = await getPayrollPolicySettings()
   const minutes = Number(attendance.offset_earned_minutes ?? attendance.excess_minutes ?? 0)
   const existing = await pool.query(
     `SELECT id, status
@@ -285,18 +287,20 @@ export async function syncPendingOffsetCredit(attendanceId: string, actorUserId?
     [attendanceId]
   )
 
-  if (minutes > 0) {
+  if (policy.offsetCreditEnabled && minutes >= policy.minimumOffsetCreditMinutes && minutes > 0) {
+    const status = policy.offsetRequiresApproval ? 'pending' : 'approved'
     if (!existing.rows[0]) {
       await pool.query(
         `INSERT INTO offset_credits (
            employee_id, attendance_id, date_earned, source, minutes_earned, minutes_remaining,
-           status, reason, created_by
-         ) VALUES ($1, $2, $3, 'excess_hours', $4, $4, 'pending', $5, $6)`,
+           status, reason, reviewed_by, reviewed_at, created_by
+         ) VALUES ($1, $2, $3, 'excess_hours', $4, $4, $5::offset_credit_status, $6, $7, CASE WHEN $5 = 'approved' THEN NOW() ELSE NULL END, $7)`,
         [
           attendance.employee_id,
           attendanceId,
           attendance.date,
           minutes,
+          status,
           'Generated from attendance excess minutes.',
           actorUserId ?? null,
         ]
@@ -309,9 +313,12 @@ export async function syncPendingOffsetCredit(attendanceId: string, actorUserId?
         `UPDATE offset_credits
          SET minutes_earned = $2,
              minutes_remaining = $2,
+             status = $3::offset_credit_status,
+             reviewed_by = CASE WHEN $3 = 'approved' THEN $4 ELSE reviewed_by END,
+             reviewed_at = CASE WHEN $3 = 'approved' THEN NOW() ELSE reviewed_at END,
              updated_at = NOW()
          WHERE id = $1`,
-        [existing.rows[0].id, minutes]
+        [existing.rows[0].id, minutes, status, actorUserId ?? null]
       )
     }
     return

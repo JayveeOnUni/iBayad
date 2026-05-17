@@ -696,8 +696,10 @@ export interface PayrollSettings {
   semiMonthlyPayDay2: number
   workingHoursPerDay: number
   workingDaysPerWeek: number
+  workDaysPerMonth: number
   offsetCreditEnabled: boolean
   offsetRequiresApproval: boolean
+  minimumOffsetCreditMinutes: number
   nightDifferentialEnabled: boolean
   regularHolidayRate: number
   specialHolidayRate: number

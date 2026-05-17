@@ -79,6 +79,10 @@ const migrations = [
     name: '018_general_settings_seeds',
     file: 'src/db/add-general-settings-seeds.sql',
   },
+  {
+    name: '019_payroll_settings_seeds',
+    file: 'src/db/add-payroll-settings-seeds.sql',
+  },
 ]
 
 function resolveSqlFile(relativeFile) {
