@@ -281,7 +281,7 @@ export const getAdminDashboard = asyncHandler(async (_req: Request, res: Respons
   const attentionItems = [
     {
       id: 'missing-attendance',
-      title: 'Missing attendance today',
+      title: 'Unrecorded attendance today',
       description: 'Active employees without an attendance record or approved leave today.',
       count: numberValue(attendanceToday.missing_attendance),
       severity: 'warning',

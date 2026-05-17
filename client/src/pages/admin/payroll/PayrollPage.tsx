@@ -922,7 +922,7 @@ export default function PayrollPage() {
                       </p>
                     </div>
                     <div className="rounded-md border border-border px-3 py-2">
-                      <p className="text-xs text-muted">Missing Attendance</p>
+                      <p className="text-xs text-muted">Unrecorded Attendance</p>
                       <p className="text-sm font-semibold text-danger">
                         {validationReport.attendance.employeesWithMissingAttendance}
                       </p>

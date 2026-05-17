@@ -6,7 +6,6 @@ import {
   FileWarning,
   Megaphone,
   Plus,
-  RefreshCw,
   Users,
   WalletCards,
 } from 'lucide-react'
@@ -125,12 +124,10 @@ export default function AdminDashboardPage() {
   const navigate = useNavigate()
   const [dashboard, setDashboard] = useState<AdminDashboardData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
-  const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const loadDashboard = useCallback(async (mode: 'initial' | 'refresh' = 'refresh') => {
     if (mode === 'initial') setIsLoading(true)
-    if (mode === 'refresh') setIsRefreshing(true)
 
     try {
       setError(null)
@@ -140,7 +137,6 @@ export default function AdminDashboardPage() {
       setError(err instanceof Error ? err.message : 'Unable to load admin dashboard.')
     } finally {
       setIsLoading(false)
-      setIsRefreshing(false)
     }
   }, [])
 
@@ -174,7 +170,7 @@ export default function AdminDashboardPage() {
         value: formatPercent(dashboard.attendanceReadiness.completionRate),
         delta: dashboard.attendanceReadiness.isPayrollReady
           ? 'Ready for payroll'
-          : `${plural(dashboard.attendanceReadiness.missingEmployeeDays, 'employee-day')} missing`,
+          : `${plural(dashboard.attendanceReadiness.missingEmployeeDays, 'employee-day')} unrecorded`,
         tone: readinessTone,
         icon: <ClipboardCheck size={20} />,
       },
@@ -208,7 +204,7 @@ export default function AdminDashboardPage() {
           title="Admin Dashboard"
           subtitle="Operational HR and payroll overview."
           actions={
-            <Button size="sm" onClick={() => loadDashboard()} leftIcon={<RefreshCw size={14} />}>
+            <Button size="sm" onClick={() => loadDashboard()}>
               Retry
             </Button>
           }
@@ -243,24 +239,13 @@ export default function AdminDashboardPage() {
         title="Admin Dashboard"
         subtitle={`Updated ${formatDateTime(dashboard.generatedAt)}`}
         actions={
-          <>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => loadDashboard()}
-              isLoading={isRefreshing}
-              leftIcon={<RefreshCw size={14} />}
-            >
-              Refresh
-            </Button>
-            <Button
-              size="sm"
-              onClick={() => navigate('/admin/employees')}
-              leftIcon={<Plus size={14} />}
-            >
-              Add Employee
-            </Button>
-          </>
+          <Button
+            size="sm"
+            onClick={() => navigate('/admin/employees')}
+            leftIcon={<Plus size={14} />}
+          >
+            Add Employee
+          </Button>
         }
       />
 
@@ -286,7 +271,7 @@ export default function AdminDashboardPage() {
               { label: 'Late', value: dashboard.attendanceToday.lateToday, status: 'late' as const },
               { label: 'Absent', value: dashboard.attendanceToday.absentToday, status: 'absent' as const },
               { label: 'On Leave', value: dashboard.attendanceToday.onLeaveToday, status: 'on_leave' as const },
-              { label: 'Missing', value: dashboard.attendanceToday.missingAttendance, status: 'missing' as const },
+              { label: 'Unrecorded', value: dashboard.attendanceToday.missingAttendance, status: 'missing' as const },
             ].map((item) => (
               <button
                 key={item.label}
@@ -319,7 +304,7 @@ export default function AdminDashboardPage() {
         <Card className="xl:col-span-2">
           <CardHeader
             title="Who Needs Attention Today"
-            subtitle="Employees with missing records, late arrivals, absences, or incomplete time logs."
+            subtitle="Employees with unrecorded attendance, late arrivals, absences, or incomplete time logs."
             action={
               <Button size="xs" variant="outline" onClick={() => navigate('/admin/attendance/daily')}>
                 Daily Log
@@ -423,7 +408,7 @@ export default function AdminDashboardPage() {
             </div>
             <div className="grid grid-cols-2 gap-3 text-sm">
               <div className="rounded-lg bg-surface p-3">
-                <p className="text-xs text-muted">Missing days</p>
+                <p className="text-xs text-muted">Unrecorded days</p>
                 <p className="mt-1 text-xl font-semibold text-ink">{dashboard.attendanceReadiness.missingEmployeeDays}</p>
               </div>
               <div className="rounded-lg bg-surface p-3">

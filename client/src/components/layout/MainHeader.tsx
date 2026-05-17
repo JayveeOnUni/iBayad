@@ -1,4 +1,4 @@
-import { Bell, Globe, ChevronDown, Menu } from 'lucide-react'
+import { Bell, ChevronDown, Menu } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../../store/authStore'
@@ -55,12 +55,6 @@ export default function MainHeader({ onMenuClick }: MainHeaderProps) {
 
       {/* Right actions */}
       <div className="flex items-center gap-2 sm:gap-4">
-        {/* Language */}
-        <button type="button" className="hidden min-h-9 items-center gap-1.5 rounded-md px-2 text-sm font-medium text-neutral-80 transition-colors hover:bg-neutral-20 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-200 sm:flex" title="English language selected">
-          <Globe size={16} />
-          <span>EN</span>
-        </button>
-
         {/* Notifications */}
         <button
           type="button"

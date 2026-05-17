@@ -410,7 +410,7 @@ async function getPeriodWarnings(period: ReturnType<typeof enrichPeriodRow>): Pr
       code: 'missing_attendance',
       severity: 'danger',
       count: missingAttendanceCount,
-      message: `${missingAttendanceCount} expected employee workday${missingAttendanceCount === 1 ? ' is' : 's are'} missing attendance records for this cutoff and will block approval.`,
+      message: `${missingAttendanceCount} expected employee workday${missingAttendanceCount === 1 ? ' has' : 's have'} unrecorded attendance for this cutoff and will block approval.`,
     })
   }
 

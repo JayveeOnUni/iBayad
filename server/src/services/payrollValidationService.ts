@@ -397,7 +397,7 @@ export async function buildPayrollValidationReport(
       code: 'missing_attendance',
       severity: 'critical',
       count: employeesWithMissingAttendance,
-      message: `Payroll cannot be approved because ${employeesWithMissingAttendance} employee${employeesWithMissingAttendance === 1 ? ' has' : 's have'} missing attendance records within this payroll period.`,
+      message: `Payroll cannot be approved because ${employeesWithMissingAttendance} employee${employeesWithMissingAttendance === 1 ? ' has' : 's have'} unrecorded attendance within this payroll period.`,
     })
   }
   if (pendingCorrections > 0) {

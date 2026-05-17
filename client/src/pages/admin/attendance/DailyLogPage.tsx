@@ -40,7 +40,7 @@ const statusLabels: Record<AttendanceFilterStatus, string> = {
   half_day: 'Half Day',
   on_leave: 'On Leave',
   holiday: 'Holiday',
-  missing: 'Missing',
+  missing: 'Unrecorded',
 }
 
 const filterStatuses: AttendanceFilterStatus[] = ['present', 'late', 'absent', 'on_leave', 'missing']
@@ -315,7 +315,7 @@ export default function DailyLogPage() {
           isLoading={isLoading}
           emptyMessage={
             status === 'missing' && !selectedDate
-              ? 'Choose a date to see employees with missing attendance.'
+              ? 'Choose a date to see employees with unrecorded attendance.'
               : 'No attendance records match the selected filters.'
           }
           columns={[
