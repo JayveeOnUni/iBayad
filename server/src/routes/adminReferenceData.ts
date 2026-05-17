@@ -24,12 +24,18 @@ import {
   updateAdminDepartment,
   updateWorkShift,
 } from '../controllers/referenceDataController'
+import {
+  getAdminGeneralSettings,
+  updateAdminGeneralSettings,
+} from '../controllers/settingsController'
 import { authenticate, requireRole } from '../middleware/auth'
 
 const router = Router()
 
 router.use(authenticate, requireRole('admin'))
 
+router.get('/settings/general', getAdminGeneralSettings)
+router.put('/settings/general', updateAdminGeneralSettings)
 router.get('/departments/active', listActiveDepartments)
 router.get('/departments', listDepartments)
 router.post('/departments', createAdminDepartment)

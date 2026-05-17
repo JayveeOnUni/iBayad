@@ -55,7 +55,9 @@ class ApiClient {
     const data = text ? JSON.parse(text) : undefined
 
     if (!res.ok) {
-      throw new Error(data?.message ?? `HTTP error ${res.status}`)
+      const error = new Error(data?.message ?? `HTTP error ${res.status}`) as Error & { details?: unknown }
+      error.details = data?.details
+      throw error
     }
 
     return data as T

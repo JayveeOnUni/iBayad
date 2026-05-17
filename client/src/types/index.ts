@@ -915,6 +915,22 @@ export interface ApiError {
   errors?: Record<string, string[]>
 }
 
+// ─── Settings ────────────────────────────────────────────────────────────────
+
+export interface GeneralSettings {
+  companyName: string
+  address: string
+  city: string
+  province: string
+  zipCode: string
+  phone: string
+  email: string
+  tin: string
+  sssEmployerNumber: string
+  philhealthEmployerNumber: string
+  pagibigEmployerNumber: string
+}
+
 // ─── Form types ───────────────────────────────────────────────────────────────
 
 export interface EmployeeFormData {

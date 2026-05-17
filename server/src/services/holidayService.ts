@@ -224,7 +224,7 @@ export async function getHolidayById(id: string): Promise<AdminHoliday | null> {
        created_at,
        updated_at
      FROM holidays
-     WHERE id = $1`,
+     WHERE id::text = $1`,
     [id]
   )
 
@@ -278,7 +278,7 @@ export async function updateHoliday(id: string, input: HolidayMutationInput): Pr
          is_working_holiday = $8,
          source = $9,
          updated_at = NOW()
-     WHERE id = $1
+     WHERE id::text = $1
      RETURNING id`,
     [
       id,
@@ -300,7 +300,7 @@ export async function updateHoliday(id: string, input: HolidayMutationInput): Pr
 export async function deleteHoliday(id: string): Promise<DeleteHolidayResult> {
   const result = await pool.query(
     `DELETE FROM holidays
-     WHERE id = $1`,
+     WHERE id::text = $1`,
     [id]
   )
 

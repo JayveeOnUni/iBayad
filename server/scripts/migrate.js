@@ -75,6 +75,10 @@ const migrations = [
     name: '017_normalize_holidays_schema',
     file: 'src/db/normalize-holidays-schema.sql',
   },
+  {
+    name: '018_general_settings_seeds',
+    file: 'src/db/add-general-settings-seeds.sql',
+  },
 ]
 
 function resolveSqlFile(relativeFile) {

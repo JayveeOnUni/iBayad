@@ -89,13 +89,27 @@ async function getCompanyProfile(db: Queryable = pool) {
   const result = await db.query(
     `SELECT key, value
      FROM system_settings
-     WHERE key IN ('company_name', 'company_address', 'company_phone', 'company_email')`
+     WHERE key IN (
+       'company_name',
+       'company_address',
+       'company_city',
+       'company_province',
+       'company_zip_code',
+       'company_phone',
+       'company_email'
+     )`
   )
   const settings = Object.fromEntries(result.rows.map((row) => [row.key, parseSetting(row.value)]))
+  const addressParts = [
+    settings.company_address,
+    settings.company_city,
+    settings.company_province,
+    settings.company_zip_code,
+  ].filter(Boolean)
   const contactParts = [settings.company_phone, settings.company_email].filter(Boolean)
   return {
     name: settings.company_name || 'iBayad Payroll Management System',
-    address: settings.company_address || '',
+    address: addressParts.join(', '),
     contact: contactParts.join(' | '),
   }
 }
