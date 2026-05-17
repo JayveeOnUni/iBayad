@@ -19,6 +19,13 @@ export interface LeaveBalanceSummary {
   entitlement_stage: string
 }
 
+interface LeaveBalanceTypeRow {
+  id: string
+  code: LeaveCode
+  name: string
+  days_per_year: unknown
+}
+
 function toNumber(value: unknown): number {
   const numberValue = Number(value ?? 0)
   return Number.isFinite(numberValue) ? numberValue : 0
@@ -30,7 +37,7 @@ export class LeaveBalanceService {
     if (!employee) throw new Error('Employee not found')
 
     const typeResult = await pool.query(
-      `SELECT id, code, name FROM leave_types
+      `SELECT id, code, name, days_per_year FROM leave_types
        WHERE is_active = true
          AND code IN ('VACATION', 'SICK', 'EMERGENCY', 'BEREAVEMENT', 'NON_PAID', 'MATERNITY', 'PATERNITY')
        ORDER BY CASE code
@@ -40,8 +47,8 @@ export class LeaveBalanceService {
     )
 
     return Promise.all(
-      typeResult.rows.map((row: { id: string; code: LeaveCode; name: string }) =>
-        this.getBalanceFor(employee, row.id, row.code, row.name, year, asOf)
+      typeResult.rows.map((row: LeaveBalanceTypeRow) =>
+        this.getBalanceFor(employee, row.id, row.code, row.name, toNumber(row.days_per_year), year, asOf)
       )
     )
   }
@@ -50,7 +57,19 @@ export class LeaveBalanceService {
     const employee = await LeavePolicyService.getEmployee(employeeId)
     const leaveType = await LeavePolicyService.getLeaveTypeByCode(code)
     if (!employee || !leaveType) return 0
-    const balance = await this.getBalanceFor(employee, leaveType.id, code, leaveType.name, year, asOf)
+    const typeRow = await pool.query<{ days_per_year: unknown }>(
+      `SELECT days_per_year FROM leave_types WHERE id = $1`,
+      [leaveType.id]
+    )
+    const balance = await this.getBalanceFor(
+      employee,
+      leaveType.id,
+      code,
+      leaveType.name,
+      toNumber(typeRow.rows[0]?.days_per_year),
+      year,
+      asOf
+    )
     return balance.available_balance
   }
 
@@ -59,11 +78,12 @@ export class LeaveBalanceService {
     leaveTypeId: string,
     code: LeaveCode,
     name: string,
+    daysPerYear: number,
     year: number,
     asOf: Date
   ): Promise<LeaveBalanceSummary> {
-    const entitlement = LeavePolicyService.entitlementFor(employee, year, code)
-    const earned = LeavePolicyService.earnedCreditsFor(employee, year, code, asOf)
+    const entitlement = await LeavePolicyService.configuredEntitlementFor(employee, year, code)
+    const earned = await LeavePolicyService.configuredEarnedCreditsFor(employee, year, code, asOf)
 
     const stored = await pool.query(
       `SELECT opening_balance, carried_over_credits, forfeited_credits, converted_to_cash_credits
@@ -78,8 +98,7 @@ export class LeaveBalanceService {
     const converted = toNumber(storedRow?.converted_to_cash_credits)
 
     const usage = await this.getUsage(employee.id, code, year)
-    const statutoryAllowance = code === 'MATERNITY' ? 105 : code === 'PATERNITY' ? 7 : code === 'BEREAVEMENT' ? 5 : 0
-    const nonAccrualOpening = ['EMERGENCY', 'NON_PAID'].includes(code) ? 0 : statutoryAllowance
+    const nonAccrualOpening = ['EMERGENCY', 'NON_PAID'].includes(code) ? 0 : daysPerYear
     const baseCredits = code === 'VACATION' || code === 'SICK' ? opening + carried + earned : nonAccrualOpening
     const available = Math.max(0, Math.round((baseCredits - usage.used - usage.pending - forfeited - converted) * 100) / 100)
 

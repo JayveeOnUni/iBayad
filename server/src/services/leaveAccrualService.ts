@@ -9,9 +9,9 @@ export class LeaveAccrualService {
   }> {
     const employee = await LeavePolicyService.getEmployee(employeeId)
     if (!employee) throw new Error('Employee not found')
-    const entitlement = LeavePolicyService.entitlementFor(employee, year, code)
+    const entitlement = await LeavePolicyService.configuredEntitlementFor(employee, year, code)
     return {
-      earnedCredits: LeavePolicyService.earnedCreditsFor(employee, year, code, asOf),
+      earnedCredits: await LeavePolicyService.configuredEarnedCreditsFor(employee, year, code, asOf),
       entitlementStage: entitlement.stage,
       annualEntitlement: entitlement.annual,
       monthlyCredit: entitlement.monthly,

@@ -174,18 +174,113 @@ export class LeavePolicyService {
   }
 
   static entitlementFor(employee: LeaveEmployeeRow, year: number, code: LeaveCode): { annual: number; monthly: number; stage: string } {
-    if (code !== 'VACATION' && code !== 'SICK') return { annual: 0, monthly: 0, stage: 'not_accrual_based' }
-    if (!this.isRegular(employee) || !employee.regularization_date) return { annual: 0, monthly: 0, stage: 'probationary_or_not_regular' }
+    const stage = this.entitlementStageFor(employee, year, code)
+    if (stage === 'not_accrual_based') return { annual: 0, monthly: 0, stage }
+    if (stage === 'probationary_or_not_regular') return { annual: 0, monthly: 0, stage: 'probationary_or_not_regular' }
+    if (stage === 'pre_2022_regular') return { annual: 15, monthly: 1.25, stage }
+    if (stage === 'regular_first_entitlement') return { annual: 5, monthly: 0.42, stage }
+    if (stage === 'regular_following_entitlement') return { annual: 10, monthly: 0.83, stage }
+    return { annual: 15, monthly: 1.25, stage }
+  }
+
+  static entitlementStageFor(employee: LeaveEmployeeRow, year: number, code: LeaveCode): string {
+    if (code !== 'VACATION' && code !== 'SICK') return 'not_accrual_based'
+    if (!this.isRegular(employee) || !employee.regularization_date) return 'probationary_or_not_regular'
 
     const regularizationDate = new Date(employee.regularization_date)
     if (regularizationDate <= new Date('2021-12-31T00:00:00')) {
-      return { annual: 15, monthly: 1.25, stage: 'pre_2022_regular' }
+      return 'pre_2022_regular'
     }
 
     const yearsAfterRegularization = year - regularizationDate.getFullYear()
-    if (yearsAfterRegularization <= 0) return { annual: 5, monthly: 0.42, stage: 'regular_first_entitlement' }
-    if (yearsAfterRegularization === 1) return { annual: 10, monthly: 0.83, stage: 'regular_following_entitlement' }
-    return { annual: 15, monthly: 1.25, stage: 'regular_later_entitlement' }
+    if (yearsAfterRegularization <= 0) return 'regular_first_entitlement'
+    if (yearsAfterRegularization === 1) return 'regular_following_entitlement'
+    return 'regular_later_entitlement'
+  }
+
+  static async configuredEntitlementFor(
+    employee: LeaveEmployeeRow,
+    year: number,
+    code: LeaveCode
+  ): Promise<{ annual: number; monthly: number; stage: string }> {
+    const fallback = this.entitlementFor(employee, year, code)
+    if (code !== 'VACATION' && code !== 'SICK') return fallback
+
+    const result = await pool.query(
+      `SELECT lp.entitlement_days, lp.monthly_credit
+       FROM leave_policies lp
+       JOIN leave_types lt ON lt.id = lp.leave_type_id
+       WHERE lt.code = $1
+         AND lp.employment_status = $2
+         AND lp.effective_date <= $3::date
+       ORDER BY lp.effective_date DESC
+       LIMIT 1`,
+      [code, fallback.stage, `${year}-12-31`]
+    )
+    const row = result.rows[0] as { entitlement_days?: unknown; monthly_credit?: unknown } | undefined
+    if (!row) return fallback
+
+    const annual = Number(row.entitlement_days ?? fallback.annual)
+    const monthly = Number(row.monthly_credit ?? fallback.monthly)
+
+    return {
+      annual: Number.isFinite(annual) ? annual : fallback.annual,
+      monthly: Number.isFinite(monthly) ? monthly : fallback.monthly,
+      stage: fallback.stage,
+    }
+  }
+
+  static async configuredEarnedCreditsFor(
+    employee: LeaveEmployeeRow,
+    year: number,
+    code: LeaveCode,
+    asOf = new Date()
+  ): Promise<number> {
+    const entitlement = await this.configuredEntitlementFor(employee, year, code)
+    const months = this.monthsEarnedForYear(employee, year, asOf)
+    return Math.min(entitlement.annual, Math.round(entitlement.monthly * months * 100) / 100)
+  }
+
+  static async configuredCarryOverLimitFor(
+    employee: LeaveEmployeeRow,
+    year: number,
+    code: LeaveCode
+  ): Promise<number | null> {
+    const entitlement = this.entitlementFor(employee, year, code)
+    const result = await pool.query(
+      `SELECT lp.carry_over_limit
+       FROM leave_policies lp
+       JOIN leave_types lt ON lt.id = lp.leave_type_id
+       WHERE lt.code = $1
+         AND lp.employment_status = $2
+         AND lp.effective_date <= $3::date
+       ORDER BY lp.effective_date DESC
+       LIMIT 1`,
+      [code, entitlement.stage, `${year}-12-31`]
+    )
+    const value = Number(result.rows[0]?.carry_over_limit)
+    return Number.isFinite(value) ? value : null
+  }
+
+  static async configuredCashConversionLimitFor(
+    employee: LeaveEmployeeRow,
+    year: number,
+    code: LeaveCode
+  ): Promise<number | null> {
+    const entitlement = this.entitlementFor(employee, year, code)
+    const result = await pool.query(
+      `SELECT lp.cash_conversion_limit
+       FROM leave_policies lp
+       JOIN leave_types lt ON lt.id = lp.leave_type_id
+       WHERE lt.code = $1
+         AND lp.employment_status = $2
+         AND lp.effective_date <= $3::date
+       ORDER BY lp.effective_date DESC
+       LIMIT 1`,
+      [code, entitlement.stage, `${year}-12-31`]
+    )
+    const value = Number(result.rows[0]?.cash_conversion_limit)
+    return Number.isFinite(value) ? value : null
   }
 
   static earnedCreditsFor(employee: LeaveEmployeeRow, year: number, code: LeaveCode, asOf = new Date()): number {

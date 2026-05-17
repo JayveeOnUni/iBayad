@@ -20,12 +20,15 @@ export class LeaveCarryOverService {
     let carriedOver = 0
 
     for (const row of employees.rows as Array<{ id: string }>) {
+      const employee = await LeavePolicyService.getEmployee(row.id)
+      if (!employee) continue
       const balance = (await LeaveBalanceService.getBalances(row.id, year, new Date(year, 11, 31)))
         .find((item) => item.code === 'VACATION')
       if (!balance) continue
 
-      const carry = Math.min(10, balance.available_balance)
-      const forfeit = Math.max(0, balance.available_balance - 10)
+      const carryOverLimit = await LeavePolicyService.configuredCarryOverLimitFor(employee, year, 'VACATION') ?? 0
+      const carry = Math.min(carryOverLimit, balance.available_balance)
+      const forfeit = Math.max(0, balance.available_balance - carryOverLimit)
       carriedOver += carry
       forfeited += forfeit
 
@@ -88,9 +91,12 @@ export class LeaveCarryOverService {
     let forfeited = 0
 
     for (const row of balances.rows as Array<Record<string, unknown>>) {
+      const employee = await LeavePolicyService.getEmployee(String(row.employee_id))
+      if (!employee) continue
       const carried = toNumber(row.carried_over_credits)
       const alreadyConverted = toNumber(row.converted_to_cash_credits)
-      const convertible = Math.max(0, Math.min(5 - alreadyConverted, carried))
+      const conversionLimit = await LeavePolicyService.configuredCashConversionLimitFor(employee, year, 'VACATION') ?? 0
+      const convertible = Math.max(0, Math.min(conversionLimit - alreadyConverted, carried))
       const forfeit = Math.max(0, carried - convertible - alreadyConverted)
       const dailyRate = toNumber(row.daily_rate) || toNumber(row.basic_salary) / (toNumber(row.work_days_per_month) || 22)
 

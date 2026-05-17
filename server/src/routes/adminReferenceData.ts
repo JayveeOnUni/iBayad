@@ -26,8 +26,10 @@ import {
 } from '../controllers/referenceDataController'
 import {
   getAdminGeneralSettings,
+  getAdminLeaveSettings,
   getAdminPayrollSettings,
   updateAdminGeneralSettings,
+  updateAdminLeaveSettings,
   updateAdminPayrollSettings,
 } from '../controllers/settingsController'
 import { authenticate, requireRole } from '../middleware/auth'
@@ -40,6 +42,8 @@ router.get('/settings/general', getAdminGeneralSettings)
 router.put('/settings/general', updateAdminGeneralSettings)
 router.get('/settings/payroll', getAdminPayrollSettings)
 router.put('/settings/payroll', updateAdminPayrollSettings)
+router.get('/settings/leave', getAdminLeaveSettings)
+router.put('/settings/leave', updateAdminLeaveSettings)
 router.get('/departments/active', listActiveDepartments)
 router.get('/departments', listDepartments)
 router.post('/departments', createAdminDepartment)

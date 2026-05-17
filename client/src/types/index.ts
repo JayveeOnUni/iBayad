@@ -243,22 +243,41 @@ export interface LeaveTypeConfig {
   id: string
   code: string
   name: string
-  description?: string
+  description?: string | null
+  daysPerYear?: number
   isPaid: boolean
   isAccrualBased: boolean
   requiresBalance: boolean
   appliesToProbationary: boolean
   appliesToRegular: boolean
-  maxDaysPerRequest?: number
-  filingDeadlineDays?: number
-  filingDeadlineType?: string
+  maxDaysPerRequest?: number | null
+  filingDeadlineDays?: number | null
+  filingDeadlineType?: string | null
   requiresDocument: boolean
-  documentRule?: string
+  documentRule?: string | null
   isCashConvertible: boolean
   isCarryOverAllowed: boolean
   isStatutory: boolean
   dayCountType: 'working_days' | 'calendar_days'
-  policyNotes?: string
+  policyNotes?: string | null
+  isActive?: boolean
+  isProtected?: boolean
+}
+
+export interface LeavePolicyConfig {
+  id: string
+  leaveTypeId: string
+  leaveTypeCode: string
+  leaveTypeName: string
+  effectiveDate: string
+  employmentStatus: string
+  entitlementDays: number
+  monthlyCredit: number
+  carryOverLimit: number | null
+  cashConversionLimit: number | null
+  forfeitureRule: string | null
+  notes: string | null
+  isProtected?: boolean
 }
 
 export interface LeaveBalance {
@@ -707,12 +726,10 @@ export interface PayrollSettings {
 }
 
 export interface LeaveSettings {
-  vacationLeaveCredits: number
-  sickLeaveCredits: number
-  emergencyLeaveCredits: number
-  leaveAccrualEnabled: boolean
-  unusedLeaveConvertible: boolean
-  unusedLeaveConversionRate: number
+  leaveTypes: LeaveTypeConfig[]
+  policies: LeavePolicyConfig[]
+  globalSettings: Record<string, never>
+  clarificationItems: string[]
 }
 
 // ─── Dashboard Stats ──────────────────────────────────────────────────────────

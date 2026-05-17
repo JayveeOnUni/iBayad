@@ -2,10 +2,13 @@ import { Request, Response } from 'express'
 import { asyncHandler, createError } from '../middleware/errorHandler'
 import {
   getGeneralSettings,
+  getLeaveSettings,
   getPayrollSettings,
   updateGeneralSettings,
+  updateLeaveSettings,
   updatePayrollSettings,
   type GeneralSettingsInput,
+  LeaveSettingsValidationError,
   type PayrollSettingsInput,
   type PayFrequency,
 } from '../services/settingsService'
@@ -183,4 +186,23 @@ export const updateAdminPayrollSettings = asyncHandler(async (req: Request, res:
   const input = validatePayrollSettingsPayload(req.body as Record<string, unknown>)
   const data = await updatePayrollSettings(input, req.user?.userId ?? null)
   res.json({ success: true, data, message: 'Payroll settings updated.' })
+})
+
+export const getAdminLeaveSettings = asyncHandler(async (_req: Request, res: Response) => {
+  const data = await getLeaveSettings()
+  res.json({ success: true, data })
+})
+
+export const updateAdminLeaveSettings = asyncHandler(async (req: Request, res: Response) => {
+  try {
+    const data = await updateLeaveSettings(req.body, req.user?.userId ?? null)
+    res.json({ success: true, data, message: 'Leave settings updated.' })
+  } catch (error) {
+    if (error instanceof LeaveSettingsValidationError) {
+      const validationError = createError(error.message, 400)
+      validationError.details = { errors: error.errors }
+      throw validationError
+    }
+    throw error
+  }
 })
