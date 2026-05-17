@@ -16,6 +16,9 @@ function toOperationalDatabaseError(err: AppError): AppError {
 
   if (err.code === '23505') {
     const constraint = err.constraint ?? ''
+    if (constraint === 'departments_code_key') {
+      return createError('A department with this code already exists.', 409)
+    }
     if (constraint.includes('email')) {
       return createError('An account or employee with that email already exists.', 409)
     }

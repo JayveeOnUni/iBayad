@@ -71,6 +71,10 @@ const migrations = [
     name: '016_consolidate_regular_shift_duplicates',
     file: 'src/db/consolidate-regular-shift-duplicates.sql',
   },
+  {
+    name: '017_normalize_holidays_schema',
+    file: 'src/db/normalize-holidays-schema.sql',
+  },
 ]
 
 function resolveSqlFile(relativeFile) {

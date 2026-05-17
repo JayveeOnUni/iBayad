@@ -44,8 +44,12 @@ export interface Department {
   name: string
   code: string
   headId?: string
-  description?: string
+  managerId?: string | null
+  managerName?: string | null
+  description?: string | null
   isActive: boolean
+  employeeCount?: number
+  positionCount?: number
   createdAt: string
   updatedAt: string
 }
@@ -316,8 +320,14 @@ export interface Holiday {
   id: string
   name: string
   date: string
+  holidayDate: string
   type: HolidayType
+  holidayType: HolidayType
   isRecurring: boolean
+  country: string
+  cityOrProvince: string | null
+  isWorkingHoliday: boolean
+  source: string | null
   createdAt: string
   updatedAt: string
 }
@@ -653,13 +663,10 @@ export interface Announcement {
   id: string
   title: string
   content: string
-  priority: 'low' | 'normal' | 'high' | 'urgent'
-  targetAudience: 'all' | 'admin' | 'employee' | 'department'
-  targetDepartmentId?: string
-  publishedAt?: string
-  expiresAt?: string
-  isPublished: boolean
-  createdBy: string
+  startDate: string | null
+  endDate: string | null
+  isPinned: boolean
+  createdBy: string | null
   createdAt: string
   updatedAt: string
 }

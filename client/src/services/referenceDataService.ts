@@ -1,5 +1,5 @@
 import { api } from './api'
-import type { ApiResponse, Shift } from '../types'
+import type { ApiResponse, Department, Shift } from '../types'
 
 export interface ActiveDepartmentLookup {
   id: string
@@ -34,6 +34,16 @@ export interface ShiftPayload {
   workingHoursPerDay: number
 }
 
+export interface DepartmentPayload {
+  name: string
+  code: string
+  description: string | null
+}
+
+export interface DeleteDepartmentResult {
+  deletedDepartmentId: string
+}
+
 export interface DeleteShiftResult {
   deletedShiftId: string
   reassignedEmployees: number
@@ -42,6 +52,21 @@ export interface DeleteShiftResult {
 export const departmentService = {
   getActive: () =>
     api.get<ApiResponse<ActiveDepartmentLookup[]>>('/admin/departments/active')
+      .then((res) => res.data),
+  getAll: () =>
+    api.get<ApiResponse<Department[]>>('/admin/departments')
+      .then((res) => res.data),
+  create: (payload: DepartmentPayload) =>
+    api.post<ApiResponse<Department>>('/admin/departments', payload)
+      .then((res) => res.data),
+  update: (id: string, payload: DepartmentPayload) =>
+    api.put<ApiResponse<Department>>(`/admin/departments/${id}`, payload)
+      .then((res) => res.data),
+  toggleActive: (id: string) =>
+    api.patch<ApiResponse<Department>>(`/admin/departments/${id}/toggle-active`)
+      .then((res) => res.data),
+  delete: (id: string) =>
+    api.delete<ApiResponse<DeleteDepartmentResult>>(`/admin/departments/${id}`)
       .then((res) => res.data),
 }
 

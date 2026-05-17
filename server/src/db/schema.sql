@@ -533,13 +533,19 @@ CREATE TABLE announcements (
 -- ─── Holidays ────────────────────────────────────────────────────────────────
 
 CREATE TABLE holidays (
-  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name          VARCHAR(100) NOT NULL,
-  date          DATE NOT NULL,
-  type          VARCHAR(20) NOT NULL CHECK (type IN ('regular', 'special_non_working')),
-  is_recurring  BOOLEAN DEFAULT true,
-  created_at    TIMESTAMPTZ DEFAULT NOW(),
-  updated_at    TIMESTAMPTZ DEFAULT NOW()
+  id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name                VARCHAR(100) NOT NULL,
+  date                DATE NOT NULL,
+  type                VARCHAR(20) NOT NULL CHECK (type IN ('regular', 'special_non_working', 'special_working')),
+  is_recurring        BOOLEAN DEFAULT true,
+  holiday_date        DATE,
+  holiday_type        VARCHAR(40) CHECK (holiday_type IS NULL OR holiday_type IN ('regular', 'special_non_working', 'special_working')),
+  country             VARCHAR(80) DEFAULT 'Philippines',
+  city_or_province    VARCHAR(120),
+  is_working_holiday  BOOLEAN DEFAULT false,
+  source              TEXT,
+  created_at          TIMESTAMPTZ DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- ─── Audit Logs ──────────────────────────────────────────────────────────────
