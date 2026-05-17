@@ -665,6 +665,51 @@ function nullableNumbersEqual(left: number | null, right: number | null): boolea
   return Math.abs(left - right) < 0.001
 }
 
+function nullableStringsEqual(left: string | null, right: string | null): boolean {
+  return (left ?? null) === (right ?? null)
+}
+
+function leaveTypeSettingsEqual(left: LeaveTypeSettings | undefined, right: LeaveTypeSettings): boolean {
+  if (!left) return false
+
+  return left.code === right.code &&
+    left.name === right.name &&
+    nullableStringsEqual(left.description, right.description) &&
+    nullableNumbersEqual(left.daysPerYear, right.daysPerYear) &&
+    left.isPaid === right.isPaid &&
+    left.isAccrualBased === right.isAccrualBased &&
+    left.requiresBalance === right.requiresBalance &&
+    left.appliesToProbationary === right.appliesToProbationary &&
+    left.appliesToRegular === right.appliesToRegular &&
+    nullableNumbersEqual(left.maxDaysPerRequest, right.maxDaysPerRequest) &&
+    left.filingDeadlineDays === right.filingDeadlineDays &&
+    nullableStringsEqual(left.filingDeadlineType, right.filingDeadlineType) &&
+    left.requiresDocument === right.requiresDocument &&
+    nullableStringsEqual(left.documentRule, right.documentRule) &&
+    left.isCashConvertible === right.isCashConvertible &&
+    left.isCarryOverAllowed === right.isCarryOverAllowed &&
+    left.isStatutory === right.isStatutory &&
+    left.dayCountType === right.dayCountType &&
+    nullableStringsEqual(left.policyNotes, right.policyNotes) &&
+    left.isActive === right.isActive
+}
+
+function leavePolicySettingsEqual(left: LeavePolicySettings | undefined, right: LeavePolicySettings): boolean {
+  if (!left) return false
+
+  return left.leaveTypeId === right.leaveTypeId &&
+    left.leaveTypeCode === right.leaveTypeCode &&
+    left.leaveTypeName === right.leaveTypeName &&
+    left.effectiveDate === right.effectiveDate &&
+    left.employmentStatus === right.employmentStatus &&
+    nullableNumbersEqual(left.entitlementDays, right.entitlementDays) &&
+    nullableNumbersEqual(left.monthlyCredit, right.monthlyCredit) &&
+    nullableNumbersEqual(left.carryOverLimit, right.carryOverLimit) &&
+    nullableNumbersEqual(left.cashConversionLimit, right.cashConversionLimit) &&
+    nullableStringsEqual(left.forfeitureRule, right.forfeitureRule) &&
+    nullableStringsEqual(left.notes, right.notes)
+}
+
 function protectedLeaveTypeChanged(current: LeaveTypeSettings, next: LeaveTypeSettings): boolean {
   return current.code !== next.code ||
     current.name !== next.name ||
@@ -883,6 +928,8 @@ export async function updateLeaveSettings(
 
     for (const leaveType of validated.leaveTypes) {
       const before = currentLeaveTypesById.get(leaveType.id)
+      if (leaveTypeSettingsEqual(before, leaveType)) continue
+
       await client.query(
         `UPDATE leave_types
          SET name = $2,
@@ -942,6 +989,8 @@ export async function updateLeaveSettings(
 
     for (const policy of validated.policies) {
       const before = currentPoliciesById.get(policy.id)
+      if (leavePolicySettingsEqual(before, policy)) continue
+
       await client.query(
         `UPDATE leave_policies
          SET entitlement_days = $2,

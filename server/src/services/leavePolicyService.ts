@@ -15,6 +15,11 @@ export interface LeaveTypePolicyRow {
   applies_to_probationary: boolean
   applies_to_regular: boolean
   max_days_per_request: string | null
+  filing_deadline_days: number | null
+  filing_deadline_type: string | null
+  requires_document: boolean
+  document_rule: string | null
+  is_statutory: boolean
   day_count_type: LeaveDayCountType
 }
 
@@ -113,6 +118,11 @@ export class LeavePolicyService {
               COALESCE(applies_to_probationary, false) AS applies_to_probationary,
               COALESCE(applies_to_regular, true) AS applies_to_regular,
               max_days_per_request,
+              filing_deadline_days,
+              filing_deadline_type,
+              COALESCE(requires_document, requires_docs, false) AS requires_document,
+              document_rule,
+              COALESCE(is_statutory, false) AS is_statutory,
               COALESCE(day_count_type, 'working_days') AS day_count_type
        FROM leave_types
        WHERE id = $1 AND is_active = true`,
@@ -128,6 +138,11 @@ export class LeavePolicyService {
               COALESCE(applies_to_probationary, false) AS applies_to_probationary,
               COALESCE(applies_to_regular, true) AS applies_to_regular,
               max_days_per_request,
+              filing_deadline_days,
+              filing_deadline_type,
+              COALESCE(requires_document, requires_docs, false) AS requires_document,
+              document_rule,
+              COALESCE(is_statutory, false) AS is_statutory,
               COALESCE(day_count_type, 'working_days') AS day_count_type
        FROM leave_types
        WHERE code = $1 AND is_active = true`,
@@ -318,19 +333,22 @@ export class LeavePolicyService {
     }
 
     await this.validateOverlap(input, errors)
+    this.validateConfiguredMaxDays(leaveType, totalDays, errors)
+    await this.validateConfiguredFilingDeadline(input, leaveType, employee, startDate, now, errors)
+    this.validateConfiguredDocuments(input, leaveType, totalDays, errors)
 
     switch (leaveType.code) {
       case 'VACATION':
-        await this.validateVacation(input, startDate, totalDays, now, warnings, errors)
+        this.validateVacation(input, totalDays, warnings)
         break
       case 'SICK':
-        this.validateSick(input, totalDays, employee, startDate, warnings, errors)
+        this.validateSick(input, totalDays, warnings)
         break
       case 'EMERGENCY':
-        this.validateEmergency(input, employee, startDate, warnings, errors)
+        this.validateEmergency(input, warnings, errors)
         break
       case 'BEREAVEMENT':
-        this.validateBereavement(input, totalDays, warnings, errors)
+        this.validateBereavement(input, warnings, errors)
         break
       case 'MATERNITY':
         this.validateMaternity(input, totalDays, employee, errors)
@@ -362,22 +380,99 @@ export class LeavePolicyService {
     if (result.rows[0]) errors.push('This request overlaps with an existing leave request.')
   }
 
-  private static async validateVacation(
+  private static validateConfiguredMaxDays(leaveType: LeaveTypePolicyRow, totalDays: number, errors: string[]): void {
+    const maxDays = Number(leaveType.max_days_per_request)
+    if (!Number.isFinite(maxDays) || maxDays <= 0 || totalDays <= maxDays) return
+
+    if (leaveType.code === 'VACATION') return
+
+    errors.push(`${leaveType.name} cannot exceed ${maxDays} day${maxDays === 1 ? '' : 's'} per request.`)
+  }
+
+  private static async validateConfiguredFilingDeadline(
     input: LeaveRequestInput,
+    leaveType: LeaveTypePolicyRow,
+    employee: LeaveEmployeeRow,
     startDate: Date,
-    totalDays: number,
     now: Date,
-    warnings: string[],
     errors: string[]
   ): Promise<void> {
-    const workingDaysBeforeStart = await HolidayCalendarService.countWorkingDays({
-      startDate: addDays(now, 1),
-      endDate: addDays(startDate, -1),
-      country: 'Philippines',
-    })
-    if (workingDaysBeforeStart < 7) {
-      errors.push('Vacation leave must be filed at least 7 working days before the requested date.')
+    const deadlineType = leaveType.filing_deadline_type?.trim()
+    if (!deadlineType) return
+
+    if (deadlineType === 'one_hour_before_shift') {
+      this.validateOneHourNotice(input, employee, startDate, errors, leaveType.name)
+      return
     }
+
+    const deadlineDays = leaveType.filing_deadline_days
+    if (deadlineDays === null || deadlineDays === undefined) return
+
+    if (deadlineType === 'working_days_before_start') {
+      const workingDaysBeforeStart = await HolidayCalendarService.countWorkingDays({
+        startDate: addDays(now, 1),
+        endDate: addDays(startDate, -1),
+        country: employee.nationality && employee.nationality !== 'Filipino' ? employee.nationality : 'Philippines',
+        cityOrProvince: employee.city ?? employee.province ?? undefined,
+      })
+      if (workingDaysBeforeStart < deadlineDays) {
+        errors.push(`${leaveType.name} must be filed at least ${deadlineDays} working day${deadlineDays === 1 ? '' : 's'} before the requested date.`)
+      }
+      return
+    }
+
+    if (deadlineType === 'calendar_days_before_start' || deadlineType === 'days_before_start') {
+      const calendarDaysBeforeStart = differenceInCalendarDays(startDate, now)
+      if (calendarDaysBeforeStart < deadlineDays) {
+        errors.push(`${leaveType.name} must be filed at least ${deadlineDays} calendar day${deadlineDays === 1 ? '' : 's'} before the requested date.`)
+      }
+    }
+  }
+
+  private static validateConfiguredDocuments(
+    input: LeaveRequestInput,
+    leaveType: LeaveTypePolicyRow,
+    totalDays: number,
+    errors: string[]
+  ): void {
+    if (!leaveType.requires_document) return
+
+    const documentTypes = new Set(input.documentTypes ?? [])
+    const requiredTypes = this.requiredDocumentTypesFor(leaveType, totalDays, Boolean(input.isContagious))
+    for (const documentType of requiredTypes) {
+      if (!documentTypes.has(documentType)) {
+        errors.push(`${leaveType.name} requires ${this.documentLabel(documentType)}.`)
+      }
+    }
+  }
+
+  private static requiredDocumentTypesFor(leaveType: LeaveTypePolicyRow, totalDays: number, isContagious: boolean): string[] {
+    const rule = leaveType.document_rule?.toLowerCase() ?? ''
+    const required = new Set<string>()
+    const hasKnownRule = rule.includes('medical certificate') || rule.includes('medical clearance')
+
+    if (rule.includes('medical certificate')) {
+      if (!rule.includes('more than 2') || totalDays > 2) required.add('MEDICAL_CERTIFICATE')
+    }
+    if (rule.includes('medical clearance') && (!rule.includes('contagious') || isContagious)) {
+      required.add('MEDICAL_CLEARANCE')
+    }
+    if (required.size === 0 && leaveType.requires_document && !hasKnownRule) {
+      required.add('SUPPORTING_DOCUMENT')
+    }
+
+    return Array.from(required)
+  }
+
+  private static documentLabel(documentType: string): string {
+    return documentType.toLowerCase().replace(/_/g, ' ')
+  }
+
+  private static validateVacation(
+    input: LeaveRequestInput,
+    totalDays: number,
+    warnings: string[]
+  ): void {
     if (totalDays > 3) {
       warnings.push('Clarification required: vacation leave above 3 days may be prohibited or may require department head approval.')
     }
@@ -387,12 +482,8 @@ export class LeavePolicyService {
   private static validateSick(
     input: LeaveRequestInput,
     totalDays: number,
-    employee: LeaveEmployeeRow,
-    startDate: Date,
-    warnings: string[],
-    errors: string[]
+    warnings: string[]
   ): void {
-    this.validateOneHourNotice(input, employee, startDate, errors)
     const documentTypes = new Set(input.documentTypes ?? [])
     if (totalDays > 2 && !documentTypes.has('MEDICAL_CERTIFICATE')) {
       warnings.push('Sick leave of more than 2 days requires a medical certificate before returning to work.')
@@ -404,20 +495,16 @@ export class LeavePolicyService {
 
   private static validateEmergency(
     input: LeaveRequestInput,
-    employee: LeaveEmployeeRow,
-    startDate: Date,
     warnings: string[],
     errors: string[]
   ): void {
-    this.validateOneHourNotice(input, employee, startDate, errors)
     if (!input.emergencyReasonCategory || !EMERGENCY_REASONS.has(input.emergencyReasonCategory)) {
       errors.push('Emergency leave requires a valid emergency reason category.')
     }
     warnings.push('Emergency leave documentation is not specified in the memo and requires HR confirmation.')
   }
 
-  private static validateBereavement(input: LeaveRequestInput, totalDays: number, warnings: string[], errors: string[]): void {
-    if (totalDays > 5) errors.push('Bereavement leave cannot exceed 5 days.')
+  private static validateBereavement(input: LeaveRequestInput, warnings: string[], errors: string[]): void {
     if (!input.relationshipToDeceased || !BEREAVEMENT_RELATIONSHIPS.has(input.relationshipToDeceased)) {
       errors.push('Bereavement leave requires an immediate family relationship covered by the memo.')
     }
@@ -457,9 +544,15 @@ export class LeavePolicyService {
     }
   }
 
-  private static validateOneHourNotice(input: LeaveRequestInput, employee: LeaveEmployeeRow, startDate: Date, errors: string[]): void {
+  private static validateOneHourNotice(
+    input: LeaveRequestInput,
+    employee: LeaveEmployeeRow,
+    startDate: Date,
+    errors: string[],
+    leaveName = 'Sick and emergency leave'
+  ): void {
     if (!input.notificationAt) {
-      errors.push('Sick and emergency leave require notice at least 1 hour before the start of shift.')
+      errors.push(`${leaveName} requires notice at least 1 hour before the start of shift.`)
       return
     }
     const shiftStart = employee.shift_start_time ?? '08:00:00'
@@ -467,10 +560,10 @@ export class LeavePolicyService {
     const notificationAt = new Date(input.notificationAt)
     const minutesBeforeShift = (shiftStartAt.getTime() - notificationAt.getTime()) / 60000
     if (minutesBeforeShift < 60) {
-      errors.push('Sick and emergency leave notice must be sent at least 1 hour before the start of shift.')
+      errors.push(`${leaveName} notice must be sent at least 1 hour before the start of shift.`)
     }
     if (input.notificationMethod && input.notificationMethod !== 'email' && !input.emailFollowUpAt) {
-      errors.push('Alternative sick or emergency leave notices must be complemented by email within 24 hours.')
+      errors.push(`Alternative ${leaveName.toLowerCase()} notices must be complemented by email within 24 hours.`)
     }
   }
 }

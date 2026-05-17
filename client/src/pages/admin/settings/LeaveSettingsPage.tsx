@@ -14,6 +14,12 @@ type PageMessage = { variant: 'info' | 'success' | 'warning' | 'danger'; text: s
 type FieldErrors = Record<string, string>
 type LeaveTypeField = keyof LeaveTypeConfig
 type LeavePolicyField = keyof LeavePolicyConfig
+type EnforcementStatus = 'enforced' | 'conditional' | 'reference'
+
+interface EnforcementInfo {
+  status: EnforcementStatus
+  description: string
+}
 
 const emptySettings: LeaveSettings = {
   leaveTypes: [],
@@ -39,6 +45,60 @@ function parseOptionalNumber(value: string): number | null {
 function parseRequiredNumber(value: string): number {
   const numberValue = Number(value)
   return Number.isFinite(numberValue) ? numberValue : 0
+}
+
+const enforcementLabels: Record<EnforcementStatus, string> = {
+  enforced: 'Enforced',
+  conditional: 'Conditionally enforced',
+  reference: 'Reference only',
+}
+
+const enforcementVariants: Record<EnforcementStatus, 'success' | 'warning' | 'neutral'> = {
+  enforced: 'success',
+  conditional: 'warning',
+  reference: 'neutral',
+}
+
+const leaveTypeEnforcement: Partial<Record<LeaveTypeField, EnforcementInfo>> = {
+  name: { status: 'reference', description: 'Display label only; backend validation relies on the stable code.' },
+  daysPerYear: { status: 'conditional', description: 'Used for non-accrual balance displays; vacation and sick credits come from policy rows.' },
+  dayCountType: { status: 'enforced', description: 'Used when counting requested leave days.' },
+  maxDaysPerRequest: { status: 'conditional', description: 'Used by generic filing validation; vacation still keeps its policy clarification route.' },
+  filingDeadlineDays: { status: 'enforced', description: 'Used with supported deadline types during filing validation.' },
+  filingDeadlineType: { status: 'enforced', description: 'Supported types enforce advance filing or one-hour notice rules.' },
+  documentRule: { status: 'conditional', description: 'Used with Requires Document when the rule maps to known document types.' },
+  isPaid: { status: 'conditional', description: 'Used for paid/unpaid and payroll impact; statutory and emergency rules can override it.' },
+  isAccrualBased: { status: 'reference', description: 'Shown for policy classification; current accrual logic is still code and policy-row based.' },
+  requiresBalance: { status: 'enforced', description: 'Used when deciding whether insufficient credits block filing.' },
+  requiresDocument: { status: 'enforced', description: 'Used during filing validation with document rule parsing.' },
+  appliesToProbationary: { status: 'enforced', description: 'Used by employee eligibility validation.' },
+  appliesToRegular: { status: 'enforced', description: 'Used by employee eligibility validation.' },
+  isCashConvertible: { status: 'reference', description: 'Shown as policy metadata; current cash conversion uses vacation policy limits.' },
+  isCarryOverAllowed: { status: 'reference', description: 'Shown as policy metadata; current carry-over uses vacation policy limits.' },
+}
+
+const policyEnforcement: Partial<Record<LeavePolicyField, EnforcementInfo>> = {
+  entitlementDays: { status: 'enforced', description: 'Used for configured vacation and sick annual credits.' },
+  monthlyCredit: { status: 'enforced', description: 'Used for configured vacation and sick monthly earned credits.' },
+  carryOverLimit: { status: 'conditional', description: 'Used by vacation year-end carry-over processing.' },
+  cashConversionLimit: { status: 'conditional', description: 'Used by vacation cash conversion processing.' },
+  forfeitureRule: { status: 'reference', description: 'Policy note only; forfeiture is calculated from numeric limits.' },
+  notes: { status: 'reference', description: 'Admin note only.' },
+}
+
+function enforcementHint(info: EnforcementInfo | undefined, extra?: string): string | undefined {
+  if (!info) return extra
+  return `${enforcementLabels[info.status]}: ${info.description}${extra ? ` ${extra}` : ''}`
+}
+
+function EnforcementBadge({ info }: { info?: EnforcementInfo }) {
+  if (!info) return null
+
+  return (
+    <Badge variant={enforcementVariants[info.status]} className="normal-case">
+      {enforcementLabels[info.status]}
+    </Badge>
+  )
 }
 
 function extractServerFieldErrors(error: unknown): FieldErrors {
@@ -86,12 +146,14 @@ function validateSettings(settings: LeaveSettings): FieldErrors {
 function ToggleRow({
   label,
   description,
+  enforcement,
   checked,
   disabled,
   onChange,
 }: {
   label: string
   description: string
+  enforcement?: EnforcementInfo
   checked: boolean
   disabled: boolean
   onChange: (checked: boolean) => void
@@ -99,7 +161,10 @@ function ToggleRow({
   return (
     <label className="flex items-center justify-between gap-4 border-b border-border py-2.5 last:border-0">
       <span>
-        <span className="block text-sm font-medium text-ink">{label}</span>
+        <span className="flex flex-wrap items-center gap-2 text-sm font-medium text-ink">
+          {label}
+          <EnforcementBadge info={enforcement} />
+        </span>
         <span className="block text-xs text-muted">{description}</span>
       </span>
       <input
@@ -232,13 +297,14 @@ export default function LeaveSettingsPage() {
             disabled={disabled}
             onChange={(event) => updateLeaveType(leaveType.id, 'name', event.target.value)}
             error={fieldErrors[fieldErrorKey('leaveTypes', leaveType.id, 'name')]}
+            hint={enforcementHint(leaveTypeEnforcement.name)}
           />
           <Input
             label="Code"
             value={leaveType.code}
             disabled
             error={fieldErrors[fieldErrorKey('leaveTypes', leaveType.id, 'code')]}
-            hint="Stable backend code"
+            hint="Enforced: Stable backend code used by special leave rules."
           />
           <Input
             label="Days / Year"
@@ -249,6 +315,7 @@ export default function LeaveSettingsPage() {
             disabled={disabled}
             onChange={(event) => updateLeaveType(leaveType.id, 'daysPerYear', parseRequiredNumber(event.target.value))}
             error={fieldErrors[fieldErrorKey('leaveTypes', leaveType.id, 'daysPerYear')]}
+            hint={enforcementHint(leaveTypeEnforcement.daysPerYear)}
           />
           <Select
             label="Day Count"
@@ -256,6 +323,7 @@ export default function LeaveSettingsPage() {
             disabled={disabled}
             onChange={(event) => updateLeaveType(leaveType.id, 'dayCountType', event.target.value as LeaveTypeConfig['dayCountType'])}
             error={fieldErrors[fieldErrorKey('leaveTypes', leaveType.id, 'dayCountType')]}
+            hint={enforcementHint(leaveTypeEnforcement.dayCountType)}
           >
             <option value="working_days">Working days</option>
             <option value="calendar_days">Calendar days</option>
@@ -269,6 +337,7 @@ export default function LeaveSettingsPage() {
             disabled={disabled}
             onChange={(event) => updateLeaveType(leaveType.id, 'maxDaysPerRequest', parseOptionalNumber(event.target.value))}
             error={fieldErrors[fieldErrorKey('leaveTypes', leaveType.id, 'maxDaysPerRequest')]}
+            hint={enforcementHint(leaveTypeEnforcement.maxDaysPerRequest)}
           />
           <Input
             label="Filing Deadline"
@@ -278,34 +347,36 @@ export default function LeaveSettingsPage() {
             disabled={disabled}
             onChange={(event) => updateLeaveType(leaveType.id, 'filingDeadlineDays', parseOptionalNumber(event.target.value))}
             error={fieldErrors[fieldErrorKey('leaveTypes', leaveType.id, 'filingDeadlineDays')]}
-            hint="Days before start"
+            hint={enforcementHint(leaveTypeEnforcement.filingDeadlineDays, 'Days before start.')}
           />
           <Input
             label="Deadline Type"
             value={leaveType.filingDeadlineType ?? ''}
             disabled={disabled}
             onChange={(event) => updateLeaveType(leaveType.id, 'filingDeadlineType', event.target.value || undefined)}
+            hint={enforcementHint(leaveTypeEnforcement.filingDeadlineType)}
           />
           <Input
             label="Document Rule"
             value={leaveType.documentRule ?? ''}
             disabled={disabled}
             onChange={(event) => updateLeaveType(leaveType.id, 'documentRule', event.target.value || undefined)}
+            hint={enforcementHint(leaveTypeEnforcement.documentRule)}
           />
         </div>
 
         <div className="mt-4 grid grid-cols-1 gap-x-6 lg:grid-cols-2">
           <div>
-            <ToggleRow label="Paid" description="Approved leave is paid when payroll impact is calculated." checked={leaveType.isPaid} disabled={disabled} onChange={(checked) => updateLeaveType(leaveType.id, 'isPaid', checked)} />
-            <ToggleRow label="Accrual Based" description="Balances are earned monthly from policy rows." checked={leaveType.isAccrualBased} disabled={disabled} onChange={(checked) => updateLeaveType(leaveType.id, 'isAccrualBased', checked)} />
-            <ToggleRow label="Requires Balance" description="Requests consume tracked leave balances." checked={leaveType.requiresBalance} disabled={disabled} onChange={(checked) => updateLeaveType(leaveType.id, 'requiresBalance', checked)} />
-            <ToggleRow label="Requires Document" description="Application workflow expects supporting documents." checked={leaveType.requiresDocument} disabled={disabled} onChange={(checked) => updateLeaveType(leaveType.id, 'requiresDocument', checked)} />
+            <ToggleRow label="Paid" description="Approved leave is paid when payroll impact is calculated." enforcement={leaveTypeEnforcement.isPaid} checked={leaveType.isPaid} disabled={disabled} onChange={(checked) => updateLeaveType(leaveType.id, 'isPaid', checked)} />
+            <ToggleRow label="Accrual Based" description="Balances are earned monthly from policy rows." enforcement={leaveTypeEnforcement.isAccrualBased} checked={leaveType.isAccrualBased} disabled={disabled} onChange={(checked) => updateLeaveType(leaveType.id, 'isAccrualBased', checked)} />
+            <ToggleRow label="Requires Balance" description="Requests consume tracked leave balances." enforcement={leaveTypeEnforcement.requiresBalance} checked={leaveType.requiresBalance} disabled={disabled} onChange={(checked) => updateLeaveType(leaveType.id, 'requiresBalance', checked)} />
+            <ToggleRow label="Requires Document" description="Application workflow expects supporting documents." enforcement={leaveTypeEnforcement.requiresDocument} checked={leaveType.requiresDocument} disabled={disabled} onChange={(checked) => updateLeaveType(leaveType.id, 'requiresDocument', checked)} />
           </div>
           <div>
-            <ToggleRow label="Probationary Applies" description="Probationary employees can select this leave type." checked={leaveType.appliesToProbationary} disabled={disabled} onChange={(checked) => updateLeaveType(leaveType.id, 'appliesToProbationary', checked)} />
-            <ToggleRow label="Regular Applies" description="Regular employees can select this leave type." checked={leaveType.appliesToRegular} disabled={disabled} onChange={(checked) => updateLeaveType(leaveType.id, 'appliesToRegular', checked)} />
-            <ToggleRow label="Cash Convertible" description="Unused balances can be converted if policy limits allow it." checked={leaveType.isCashConvertible} disabled={disabled} onChange={(checked) => updateLeaveType(leaveType.id, 'isCashConvertible', checked)} />
-            <ToggleRow label="Carry Over Allowed" description="Year-end processing can carry remaining credits forward." checked={leaveType.isCarryOverAllowed} disabled={disabled} onChange={(checked) => updateLeaveType(leaveType.id, 'isCarryOverAllowed', checked)} />
+            <ToggleRow label="Probationary Applies" description="Probationary employees can select this leave type." enforcement={leaveTypeEnforcement.appliesToProbationary} checked={leaveType.appliesToProbationary} disabled={disabled} onChange={(checked) => updateLeaveType(leaveType.id, 'appliesToProbationary', checked)} />
+            <ToggleRow label="Regular Applies" description="Regular employees can select this leave type." enforcement={leaveTypeEnforcement.appliesToRegular} checked={leaveType.appliesToRegular} disabled={disabled} onChange={(checked) => updateLeaveType(leaveType.id, 'appliesToRegular', checked)} />
+            <ToggleRow label="Cash Convertible" description="Unused balances can be converted if policy limits allow it." enforcement={leaveTypeEnforcement.isCashConvertible} checked={leaveType.isCashConvertible} disabled={disabled} onChange={(checked) => updateLeaveType(leaveType.id, 'isCashConvertible', checked)} />
+            <ToggleRow label="Carry Over Allowed" description="Year-end processing can carry remaining credits forward." enforcement={leaveTypeEnforcement.isCarryOverAllowed} checked={leaveType.isCarryOverAllowed} disabled={disabled} onChange={(checked) => updateLeaveType(leaveType.id, 'isCarryOverAllowed', checked)} />
           </div>
         </div>
       </Card>
@@ -332,6 +403,7 @@ export default function LeaveSettingsPage() {
           disabled={disabled}
           onChange={(event) => updatePolicy(policy.id, 'entitlementDays', parseRequiredNumber(event.target.value))}
           error={fieldErrors[`${prefix}.entitlementDays`]}
+          hint={enforcementHint(policyEnforcement.entitlementDays)}
         />
         <Input
           label="Monthly Credit"
@@ -342,6 +414,7 @@ export default function LeaveSettingsPage() {
           disabled={disabled}
           onChange={(event) => updatePolicy(policy.id, 'monthlyCredit', parseRequiredNumber(event.target.value))}
           error={fieldErrors[`${prefix}.monthlyCredit`]}
+          hint={enforcementHint(policyEnforcement.monthlyCredit)}
         />
         <Input
           label="Carry Over"
@@ -352,6 +425,7 @@ export default function LeaveSettingsPage() {
           disabled={disabled}
           onChange={(event) => updatePolicy(policy.id, 'carryOverLimit', parseOptionalNumber(event.target.value))}
           error={fieldErrors[`${prefix}.carryOverLimit`]}
+          hint={enforcementHint(policyEnforcement.carryOverLimit)}
         />
         <Input
           label="Cash Conversion"
@@ -362,6 +436,7 @@ export default function LeaveSettingsPage() {
           disabled={disabled}
           onChange={(event) => updatePolicy(policy.id, 'cashConversionLimit', parseOptionalNumber(event.target.value))}
           error={fieldErrors[`${prefix}.cashConversionLimit`]}
+          hint={enforcementHint(policyEnforcement.cashConversionLimit)}
         />
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:col-span-6">
           <Input
@@ -369,12 +444,14 @@ export default function LeaveSettingsPage() {
             value={policy.forfeitureRule ?? ''}
             disabled={disabled}
             onChange={(event) => updatePolicy(policy.id, 'forfeitureRule', event.target.value || null)}
+            hint={enforcementHint(policyEnforcement.forfeitureRule)}
           />
           <Input
             label="Notes"
             value={policy.notes ?? ''}
             disabled={disabled}
             onChange={(event) => updatePolicy(policy.id, 'notes', event.target.value || null)}
+            hint={enforcementHint(policyEnforcement.notes)}
           />
         </div>
       </div>
@@ -390,6 +467,9 @@ export default function LeaveSettingsPage() {
 
       {message && <FeedbackMessage variant={message.variant}>{message.text}</FeedbackMessage>}
       {isLoading && <FeedbackMessage>Loading leave settings...</FeedbackMessage>}
+      <FeedbackMessage>
+        Settings marked Enforced affect backend filing, balances, or payroll. Conditionally enforced settings apply only where supported by current legal or business-rule paths. Reference-only settings are retained as policy metadata.
+      </FeedbackMessage>
       {settings.clarificationItems.length > 0 && (
         <FeedbackMessage variant="warning">
           <span className="font-medium">Policy clarifications:</span> {settings.clarificationItems.join(' ')}

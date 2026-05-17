@@ -101,9 +101,9 @@ export class LeaveRequestService {
     }
 
     const year = LeavePolicyService.parseDate(input.startDate).getFullYear()
-    const split = await this.computeDeductionSplit(input.employeeId, validation.leaveType.code, validation.totalDays, year)
+    const split = await this.computeDeductionSplit(input.employeeId, validation.leaveType, validation.totalDays, year)
 
-    if ((validation.leaveType.code === 'VACATION' || validation.leaveType.code === 'SICK') && split.unpaidDays > 0) {
+    if (validation.leaveType.requires_balance && validation.leaveType.is_paid && split.unpaidDays > 0) {
       const error = new Error(`Insufficient ${validation.leaveType.name.toLowerCase()} credits.`)
       error.name = 'LeaveValidationError'
       throw error
@@ -118,8 +118,8 @@ export class LeaveRequestService {
          delivery_date, delivery_count, spouse_delivery_count, relationship_to_deceased,
          acknowledged_policy, is_half_day
        ) VALUES (
-         $1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9, $10, $11, $12, 0,
-         'not_applied', 'not_applied', $13, $14, $15, $16, $17, $18, $19, $20, $21, false
+         $1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9, $10, $11, $12, $13,
+         'not_applied', 'not_applied', $14, $15, $16, $17, $18, $19, $20, $21, $22, false
        ) RETURNING *`,
       [
         input.employeeId,
@@ -130,10 +130,11 @@ export class LeaveRequestService {
         validation.dayCountType,
         input.reason,
         input.emergencyReasonCategory ?? null,
-        split.unpaidDays < validation.totalDays && validation.leaveType.code !== 'NON_PAID',
+        split.unpaidDays < validation.totalDays,
         split.unpaidDays,
         split.deductedSickDays,
         split.deductedVacationDays,
+        split.deductedOtherDays,
         input.notificationAt ?? null,
         input.notificationMethod ?? null,
         input.emailFollowUpAt ?? null,
@@ -177,9 +178,13 @@ export class LeaveRequestService {
     await this.validateApprovalDocuments(existing)
 
     const year = new Date(existing.start_date).getFullYear()
-    const split = await this.computeDeductionSplit(existing.employee_id, existing.leave_type_code, Number(existing.total_days), year)
-    if ((existing.leave_type_code === 'VACATION' || existing.leave_type_code === 'SICK') && split.unpaidDays > 0) {
-      throw new Error(`Insufficient ${String(existing.leave_type_name).toLowerCase()} credits.`)
+    const split = await this.computeDeductionSplit(existing.employee_id, {
+      code: existing.leave_type_code,
+      is_paid: existing.leave_type_is_paid,
+      requires_balance: existing.leave_type_requires_balance,
+    }, Number(existing.total_days), year)
+    if (existing.leave_type_requires_balance && existing.leave_type_is_paid && split.unpaidDays > 0) {
+      throw new Error(`Insufficient ${existing.leave_type_name.toLowerCase()} credits.`)
     }
 
     const update = await pool.query(
@@ -193,6 +198,7 @@ export class LeaveRequestService {
            deducted_sick_days = $5,
            deducted_vacation_days = $6,
            is_paid = $7,
+           deducted_other_days = $8,
            updated_at = NOW()
        WHERE id = $1
        RETURNING *`,
@@ -203,7 +209,8 @@ export class LeaveRequestService {
         split.unpaidDays,
         split.deductedSickDays,
         split.deductedVacationDays,
-        split.unpaidDays < Number(existing.total_days) && existing.leave_type_code !== 'NON_PAID',
+        split.unpaidDays < Number(existing.total_days),
+        split.deductedOtherDays,
       ]
     )
     const approved = update.rows[0] as Record<string, unknown>
@@ -336,7 +343,10 @@ export class LeaveRequestService {
   static async preview(input: LeaveRequestInput): Promise<Record<string, unknown>> {
     const validation = await LeavePolicyService.validate(input)
     const year = LeavePolicyService.parseDate(input.startDate).getFullYear()
-    const split = await this.computeDeductionSplit(input.employeeId, validation.leaveType.code, validation.totalDays, year)
+    const split = await this.computeDeductionSplit(input.employeeId, validation.leaveType, validation.totalDays, year)
+    if (validation.leaveType.requires_balance && validation.leaveType.is_paid && split.unpaidDays > 0) {
+      validation.errors.push(`Insufficient ${validation.leaveType.name.toLowerCase()} credits.`)
+    }
     return {
       leaveType: validation.leaveType,
       totalDays: validation.totalDays,
@@ -349,24 +359,36 @@ export class LeaveRequestService {
     }
   }
 
-  private static async computeDeductionSplit(employeeId: string, code: LeaveCode, totalDays: number, year: number): Promise<{
+  private static async computeDeductionSplit(employeeId: string, leaveType: {
+    code: LeaveCode
+    is_paid: boolean
+    requires_balance: boolean
+  }, totalDays: number, year: number): Promise<{
     deductedSickDays: number
     deductedVacationDays: number
+    deductedOtherDays: number
     unpaidDays: number
   }> {
-    if (code === 'NON_PAID') return { deductedSickDays: 0, deductedVacationDays: 0, unpaidDays: totalDays }
+    const code = leaveType.code
+    const emptyPaid = { deductedSickDays: 0, deductedVacationDays: 0, deductedOtherDays: 0, unpaidDays: 0 }
+    const unpaid = { deductedSickDays: 0, deductedVacationDays: 0, deductedOtherDays: 0, unpaidDays: totalDays }
+
+    if (code === 'NON_PAID') return unpaid
+    if (code !== 'MATERNITY' && code !== 'PATERNITY' && !leaveType.is_paid) return unpaid
+    if (!leaveType.requires_balance && code !== 'EMERGENCY') return emptyPaid
+
     if (code === 'VACATION') {
       const available = await LeaveBalanceService.getAvailable(employeeId, 'VACATION', year)
-      return { deductedSickDays: 0, deductedVacationDays: Math.min(totalDays, available), unpaidDays: Math.max(0, totalDays - available) }
+      return { deductedSickDays: 0, deductedVacationDays: Math.min(totalDays, available), deductedOtherDays: 0, unpaidDays: Math.max(0, totalDays - available) }
     }
     if (code === 'SICK') {
       const available = await LeaveBalanceService.getAvailable(employeeId, 'SICK', year)
-      return { deductedSickDays: Math.min(totalDays, available), deductedVacationDays: 0, unpaidDays: Math.max(0, totalDays - available) }
+      return { deductedSickDays: Math.min(totalDays, available), deductedVacationDays: 0, deductedOtherDays: 0, unpaidDays: Math.max(0, totalDays - available) }
     }
     if (code === 'EMERGENCY') {
       const employee = await LeavePolicyService.getEmployee(employeeId)
       if (!employee || LeavePolicyService.isProbationary(employee)) {
-        return { deductedSickDays: 0, deductedVacationDays: 0, unpaidDays: totalDays }
+        return unpaid
       }
       const sick = await LeaveBalanceService.getAvailable(employeeId, 'SICK', year)
       const deductedSickDays = Math.min(totalDays, sick)
@@ -376,11 +398,16 @@ export class LeaveRequestService {
       return {
         deductedSickDays,
         deductedVacationDays,
+        deductedOtherDays: 0,
         unpaidDays: Math.max(0, remainingAfterSick - deductedVacationDays),
       }
     }
-    if (code === 'BEREAVEMENT') return { deductedSickDays: 0, deductedVacationDays: 0, unpaidDays: totalDays }
-    return { deductedSickDays: 0, deductedVacationDays: 0, unpaidDays: 0 }
+    if (leaveType.requires_balance) {
+      const available = await LeaveBalanceService.getAvailable(employeeId, code, year)
+      const deductedOtherDays = Math.min(totalDays, available)
+      return { deductedSickDays: 0, deductedVacationDays: 0, deductedOtherDays, unpaidDays: Math.max(0, totalDays - available) }
+    }
+    return emptyPaid
   }
 
   private static approvalRoute(code: LeaveCode, totalDays: number): string[] {
@@ -398,11 +425,15 @@ export class LeaveRequestService {
     day_count_type: 'working_days' | 'calendar_days'
     status: string
     is_contagious: boolean
+    leave_type_is_paid: boolean
+    leave_type_requires_balance: boolean
     leave_type_code: LeaveCode
     leave_type_name: string
   } | undefined> {
     const result = await pool.query(
-      `SELECT lr.*, lt.code AS leave_type_code, lt.name AS leave_type_name
+      `SELECT lr.*, lt.code AS leave_type_code, lt.name AS leave_type_name,
+              COALESCE(lt.is_paid, true) AS leave_type_is_paid,
+              COALESCE(lt.requires_balance, false) AS leave_type_requires_balance
        FROM leave_requests lr
        JOIN leave_types lt ON lt.id = lr.leave_type_id
        WHERE lr.id = $1`,

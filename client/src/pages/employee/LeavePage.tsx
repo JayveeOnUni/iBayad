@@ -236,6 +236,13 @@ export default function EmployeeLeavePage() {
               </div>
             )}
 
+            {selectedType?.requiresDocument && selectedCode !== 'SICK' && (
+              <label className="flex items-center gap-2 text-sm text-ink">
+                <input type="checkbox" checked={form.documentTypes?.includes('SUPPORTING_DOCUMENT') ?? false} onChange={(e) => toggleDocument('SUPPORTING_DOCUMENT', e.target.checked)} className="h-4 w-4 rounded border-border" />
+                Supporting document attached
+              </label>
+            )}
+
             {selectedCode === 'BEREAVEMENT' && (
               <div className="flex flex-col gap-1">
                 <label className="text-sm font-medium text-ink">Relationship</label>
