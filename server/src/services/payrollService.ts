@@ -770,6 +770,7 @@ export async function processBatchPayroll(
        AND a.date BETWEEN pp.start_date AND pp.end_date
        AND a.date >= GREATEST(e.hire_date, pp.start_date)
      WHERE e.employment_status = 'active'
+       AND e.is_deleted = false
        AND e.hire_date <= pp.end_date
        AND NOT EXISTS (
          SELECT 1

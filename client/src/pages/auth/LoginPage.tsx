@@ -3,16 +3,19 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { Eye, EyeOff, Lock, Mail } from 'lucide-react'
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
 import { FeedbackMessage } from '../../components/ui/Page'
 import { useAuth } from '../../hooks/useAuth'
 import type { LoginCredentials } from '../../types'
 import logoUrl from '../../Logo.png'
+import loginBackgroundUrl from '../../assets/login-office-background.png'
 
 const loginSchema = z.object({
   email: z
     .string()
+    .trim()
     .min(1, 'Email is required')
     .email('Please enter a valid email address'),
   password: z
@@ -40,12 +43,23 @@ export default function LoginPage() {
   })
 
   const onSubmit = async (data: LoginCredentials) => {
-    await login(data)
+    await login({
+      ...data,
+      email: data.email.trim().toLowerCase(),
+    })
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-surface px-4 py-8">
-      <div className="grid w-full max-w-5xl overflow-hidden rounded-lg border border-border bg-white shadow-elevated lg:grid-cols-[1fr_440px]">
+    <div className="relative isolate flex min-h-screen items-center justify-center overflow-hidden bg-surface px-4 py-8">
+      <img
+        src={loginBackgroundUrl}
+        alt=""
+        aria-hidden="true"
+        className="absolute inset-0 -z-20 h-full w-full object-cover opacity-[0.16] grayscale"
+      />
+      <div className="absolute inset-0 -z-10 bg-white/78" aria-hidden="true" />
+
+      <div className="grid w-full max-w-5xl overflow-hidden rounded-lg border border-border bg-white/95 shadow-elevated backdrop-blur-[2px] lg:grid-cols-[1fr_440px]">
         <section className="hidden bg-brand-900 p-10 text-white lg:flex lg:flex-col lg:justify-between">
           <div>
             <div className="mb-8 flex items-center gap-3">
@@ -107,12 +121,12 @@ export default function LoginPage() {
                 <label htmlFor="password" className="text-sm font-medium text-ink">
                   Password <span className="text-danger">*</span>
                 </label>
-                <a
-                  href="mailto:support@ibayad.com?subject=Password%20Reset%20Request"
+                <Link
+                  to="/forgot-password"
                   className="text-xs font-medium text-brand transition-colors hover:text-brand-700"
                 >
                   Forgot password?
-                </a>
+                </Link>
               </div>
               <Input
                 id="password"

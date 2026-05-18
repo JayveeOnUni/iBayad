@@ -3,9 +3,8 @@ import type { PoolClient } from 'pg'
 import pool from '../utils/db'
 import { asyncHandler, createError } from '../middleware/errorHandler'
 import { processBatchPayroll } from '../services/payrollService'
-import { computeDeductions } from '../utils/taxComputation'
 import { buildPayrollValidationReport } from '../services/payrollValidationService'
-import { listStatutoryRuleVersions } from '../utils/statutoryDeductions'
+import { computeGovernmentDeductionsForPeriod, listStatutoryRuleVersions } from '../utils/statutoryDeductions'
 import { hasPayrollPermission } from '../middleware/auth'
 import {
   buildPayslipPayload,
@@ -239,6 +238,7 @@ async function getPeriodSummary(periodId: string, db: Queryable = pool) {
        (SELECT COUNT(*)
         FROM employees e
         WHERE e.employment_status = 'active'
+          AND e.is_deleted = false
           AND e.hire_date <= pp.end_date)::int AS active_employee_count,
        COUNT(pr.id) FILTER (WHERE pr.status::text NOT IN ('cancelled', 'voided'))::int AS record_count,
        COUNT(pr.id) FILTER (WHERE pr.status IN ('processing', 'processed', 'validation_failed', 'ready_for_approval', 'needs_correction'))::int AS processing_record_count,
@@ -289,6 +289,7 @@ async function findPeriodRowById(periodId: string, db: Queryable = pool) {
               SELECT COUNT(*)::int
               FROM employees e
               WHERE e.employment_status = 'active'
+                AND e.is_deleted = false
                 AND e.hire_date <= pp.end_date
             ), 0) AS active_employee_count,
             COALESCE(s.record_count, 0)::int AS record_count,
@@ -333,6 +334,7 @@ async function countMissingAttendanceRows(period: Record<string, unknown>): Prom
        FROM employees e
        CROSS JOIN work_dates wd
        WHERE e.employment_status = 'active'
+         AND e.is_deleted = false
          AND e.hire_date <= $2::date
          AND wd.work_date >= GREATEST(e.hire_date, $1::date)
      )
@@ -527,6 +529,11 @@ async function recordPayrollAudit(
   )
 }
 
+function normalizeOptionalPayFrequency(value: unknown): PayFrequency {
+  if (value == null || value === '') return 'monthly'
+  return normalizePayFrequency(value)
+}
+
 function auditContext(req: Request) {
   return {
     userId: req.user?.userId,
@@ -569,7 +576,7 @@ function normalizeReportType(value: unknown): PayrollReportType {
 
 function reportFiltersFromRequest(req: Request) {
   const filters: Record<string, string> = {}
-  for (const key of ['employeeId', 'departmentId', 'status', 'startDate', 'endDate', 'search']) {
+  for (const key of ['employeeId', 'departmentId', 'status', 'employmentStatus', 'startDate', 'endDate', 'search']) {
     const value = String(req.query[key] ?? '').trim()
     if (value && value !== 'all') filters[key] = value
   }
@@ -630,7 +637,8 @@ export const getPayrollPeriods = asyncHandler(async (req: Request, res: Response
               COALESCE((
                 SELECT COUNT(*)::int
                 FROM employees e
-                WHERE e.employment_status = 'active'
+       WHERE e.employment_status = 'active'
+         AND e.is_deleted = false
                   AND e.hire_date <= pp.end_date
               ), 0) AS active_employee_count,
               COALESCE(s.record_count, 0)::int AS record_count,
@@ -1695,6 +1703,31 @@ export const computeEmployeeTax = asyncHandler(async (req: Request, res: Respons
   const salary = Number(monthlyBasicSalary)
   if (isNaN(salary) || salary <= 0) throw createError('Invalid salary amount', 400)
 
-  const deductions = computeDeductions(salary)
+  const payFrequency = normalizeOptionalPayFrequency(req.query.payFrequency ?? req.query.pay_frequency)
+  const periodEndDate = req.query.periodEndDate || req.query.period_end_date
+    ? parseDateOnly(req.query.periodEndDate ?? req.query.period_end_date, 'periodEndDate')
+    : new Date()
+  const expectedWorkDaysByFrequency: Record<PayFrequency, number> = {
+    weekly: 5,
+    'semi-monthly': 11,
+    monthly: 22,
+  }
+  const workDaysPerMonth = 22
+  const allocationFactor = payFrequency === 'monthly'
+    ? 1
+    : payFrequency === 'semi-monthly'
+      ? 0.5
+      : expectedWorkDaysByFrequency.weekly / workDaysPerMonth
+  const taxableGrossForPeriod = Math.round(salary * allocationFactor * 100) / 100
+
+  const deductions = await computeGovernmentDeductionsForPeriod({
+    monthlyBasicSalary: salary,
+    taxableGrossForPeriod,
+    payFrequency,
+    periodEndDate,
+    expectedWorkDays: expectedWorkDaysByFrequency[payFrequency],
+    workDaysPerMonth,
+    preTaxDeductions: Number(req.query.preTaxDeductions ?? req.query.pre_tax_deductions ?? 0) || 0,
+  })
   res.json({ success: true, data: deductions })
 })

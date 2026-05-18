@@ -8,6 +8,8 @@ import EmployeeLayout from './layouts/EmployeeLayout'
 // Auth
 import LoginPage from './pages/auth/LoginPage'
 import ActivateAccountPage from './pages/auth/ActivateAccountPage'
+import ForgotPasswordPage from './pages/auth/ForgotPasswordPage'
+import ResetPasswordPage from './pages/auth/ResetPasswordPage'
 
 // Admin pages
 import AdminDashboardPage from './pages/admin/DashboardPage'
@@ -94,6 +96,8 @@ export default function App() {
           }
         />
         <Route path="/account/activate" element={<ActivateAccountPage />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
 
         {/* Admin routes */}
         <Route

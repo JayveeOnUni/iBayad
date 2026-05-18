@@ -127,6 +127,7 @@ export async function buildPayrollValidationReport(
        SELECT id, employee_number, first_name, last_name, hire_date, basic_salary, work_days_per_month, work_hours_per_day
        FROM employees
        WHERE employment_status = 'active'
+         AND is_deleted = false
          AND hire_date <= $3::date
          AND NOT EXISTS (
            SELECT 1
@@ -340,7 +341,7 @@ export async function buildPayrollValidationReport(
       code: 'missing_statutory_rule_version',
       severity: 'critical',
       count: statutoryCoverage.missing.length,
-      message: 'Statutory rule versions are missing for this payroll period.',
+      message: `Statutory rule versions are missing for this ${String(period.pay_frequency ?? 'payroll')} payroll period.`,
     })
   }
   if (employeesWithMissingSalarySetup > 0) {

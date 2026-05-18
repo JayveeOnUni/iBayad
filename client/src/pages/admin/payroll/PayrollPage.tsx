@@ -247,8 +247,9 @@ export default function PayrollPage() {
   } | null>(null)
   const [reportType, setReportType] = useState<PayrollReportType>('summary')
   const [report, setReport] = useState<PayrollReport | null>(null)
-  const [reportFilters, setReportFilters] = useState<{ status: 'all' | PayrollStatus; search: string }>({
+  const [reportFilters, setReportFilters] = useState<{ status: 'all' | PayrollStatus; employmentStatus: string; search: string }>({
     status: 'all',
+    employmentStatus: 'all',
     search: '',
   })
   const [isReportLoading, setIsReportLoading] = useState(false)
@@ -526,6 +527,7 @@ export default function PayrollPage() {
       setMessage(null)
       const res = await payrollService.getPayrollReport(selectedPeriod.id, reportType, {
         ...(reportFilters.status !== 'all' ? { status: reportFilters.status } : {}),
+        ...(reportFilters.employmentStatus !== 'all' ? { employmentStatus: reportFilters.employmentStatus } : {}),
         ...(reportFilters.search.trim() ? { search: reportFilters.search.trim() } : {}),
       })
       setReport(res.data)
@@ -543,6 +545,7 @@ export default function PayrollPage() {
       setActionLoading(`export:${reportType}`)
       const res = await payrollService.exportPayrollReport(selectedPeriod.id, reportType, {
         ...(reportFilters.status !== 'all' ? { status: reportFilters.status } : {}),
+        ...(reportFilters.employmentStatus !== 'all' ? { employmentStatus: reportFilters.employmentStatus } : {}),
         ...(reportFilters.search.trim() ? { search: reportFilters.search.trim() } : {}),
       })
       if (!res.ok) throw new Error('Unable to export report.')
@@ -569,7 +572,7 @@ export default function PayrollPage() {
       return
     }
     loadReport()
-  }, [selectedPeriod?.id, reportType, reportFilters.status, reportFilters.search, canViewReports])
+  }, [selectedPeriod?.id, reportType, reportFilters.status, reportFilters.employmentStatus, reportFilters.search, canViewReports])
 
   const renderActions = (period: PayrollPeriod) => {
     const isBusy = Boolean(actionLoading)
@@ -1038,7 +1041,7 @@ export default function PayrollPage() {
                   subtitle={report ? `Generated ${formatDateTime(report.generatedAt)}` : 'Backend-approved payroll records and calculation snapshots'}
                   className="mb-0"
                 />
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 xl:min-w-[680px]">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-4 xl:min-w-[820px]">
                   <Input
                     label="Employee Search"
                     value={reportFilters.search}
@@ -1047,7 +1050,7 @@ export default function PayrollPage() {
                     placeholder="Name or ID"
                   />
                   <Select
-                    label="Status"
+                    label="Payroll Status"
                     value={reportFilters.status}
                     onChange={(event) => setReportFilters((current) => ({ ...current, status: event.target.value as 'all' | PayrollStatus }))}
                   >
@@ -1056,6 +1059,18 @@ export default function PayrollPage() {
                     <option value="approved">Approved</option>
                     <option value="released">Released</option>
                     <option value="locked">Locked</option>
+                  </Select>
+                  <Select
+                    label="Employment Status"
+                    value={reportFilters.employmentStatus}
+                    onChange={(event) => setReportFilters((current) => ({ ...current, employmentStatus: event.target.value }))}
+                  >
+                    <option value="all">All employment statuses</option>
+                    <option value="active">Active</option>
+                    <option value="inactive">Inactive / Former Employee</option>
+                    <option value="resigned">Resigned</option>
+                    <option value="terminated">Terminated</option>
+                    <option value="end_of_contract">End of Contract</option>
                   </Select>
                   <Button
                     className="self-end"

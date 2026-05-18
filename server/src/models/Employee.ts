@@ -25,6 +25,15 @@ export interface EmployeeRow {
   employment_status: string
   hire_date: DbDate
   regularization_date?: Nullable<DbDate>
+  last_working_day?: Nullable<DbDate>
+  separation_date?: Nullable<DbDate>
+  separation_reason?: Nullable<string>
+  separation_remarks?: Nullable<string>
+  separation_processed_by?: Nullable<string>
+  separation_processed_at?: Nullable<DbDate>
+  is_deleted?: boolean
+  deleted_at?: Nullable<DbDate>
+  deleted_by?: Nullable<string>
   resignation_date?: Nullable<DbDate>
   basic_salary: number
   daily_rate: number
@@ -51,6 +60,8 @@ export class EmployeeModel {
     search?: string
     departmentId?: string
     status?: string
+    includeArchived?: boolean
+    includeFormer?: boolean
   }) {
     const offset = (params.page - 1) * params.limit
     const conditions: string[] = []
@@ -74,10 +85,16 @@ export class EmployeeModel {
       paramIdx++
     }
 
-    if (params.status) {
+    if (params.status && params.status !== 'all') {
       conditions.push(`e.employment_status = $${paramIdx}`)
       values.push(params.status)
       paramIdx++
+    } else if (!params.includeFormer) {
+      conditions.push(`e.employment_status = 'active'`)
+    }
+
+    if (!params.includeArchived) {
+      conditions.push(`e.is_deleted = false`)
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
@@ -109,11 +126,15 @@ export class EmployeeModel {
 
   static async findById(id: string) {
     const result = await pool.query(
-      `SELECT e.*, d.name AS department_name, p.title AS position_title, s.name AS shift_name
+      `SELECT e.*, d.name AS department_name, p.title AS position_title, s.name AS shift_name,
+              processed_by.email AS separation_processed_by_email,
+              deleted_by_user.email AS deleted_by_email
        FROM employees e
        LEFT JOIN departments d ON e.department_id = d.id
        LEFT JOIN positions p ON e.position_id = p.id
        LEFT JOIN work_shifts s ON e.shift_id = s.id
+       LEFT JOIN users processed_by ON processed_by.id = e.separation_processed_by
+       LEFT JOIN users deleted_by_user ON deleted_by_user.id = e.deleted_by
        WHERE e.id = $1`,
       [id]
     )

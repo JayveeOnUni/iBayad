@@ -1,4 +1,5 @@
 import { useAuthStore } from '../store/authStore'
+import type { ApiResponse } from '../types'
 
 const DEFAULT_BASE_URL = '/api'
 
@@ -22,8 +23,11 @@ const BASE_URL = normalizeBaseUrl(
   import.meta.env.VITE_API_BASE_URL ?? import.meta.env.VITE_API_URL
 )
 
+type RefreshResponse = ApiResponse<{ accessToken: string }>
+
 class ApiClient {
   private baseUrl: string
+  private refreshPromise: Promise<string> | null = null
 
   constructor(baseUrl: string) {
     this.baseUrl = baseUrl
@@ -44,13 +48,40 @@ class ApiClient {
     return headers
   }
 
-  private async handleResponse<T>(res: Response): Promise<T> {
-    if (res.status === 401) {
-      useAuthStore.getState().logout()
+  private clearAuthAndRedirect(): void {
+    useAuthStore.getState().logout()
+    if (window.location.pathname !== '/login') {
       window.location.href = '/login'
-      throw new Error('Unauthorized')
+    }
+  }
+
+  private async refreshAccessToken(): Promise<string> {
+    if (this.refreshPromise) return this.refreshPromise
+
+    const refreshToken = useAuthStore.getState().tokens?.refreshToken
+    if (!refreshToken) {
+      throw new Error('No refresh token available')
     }
 
+    this.refreshPromise = fetch(this.resolveUrl('/auth/refresh'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken }),
+    })
+      .then(async (res) => {
+        const data = await this.parseResponse<RefreshResponse>(res)
+        const accessToken = data.data.accessToken
+        useAuthStore.getState().setTokens({ accessToken, refreshToken })
+        return accessToken
+      })
+      .finally(() => {
+        this.refreshPromise = null
+      })
+
+    return this.refreshPromise
+  }
+
+  private async parseResponse<T>(res: Response): Promise<T> {
     const text = await res.text()
     const data = text ? JSON.parse(text) : undefined
 
@@ -63,6 +94,43 @@ class ApiClient {
     return data as T
   }
 
+  private async request<T>(
+    path: string,
+    init: RequestInit,
+    retryOnUnauthorized = true
+  ): Promise<T> {
+    return this.requestUrl<T>(this.resolveUrl(path), path, init, retryOnUnauthorized)
+  }
+
+  private async requestUrl<T>(
+    url: string,
+    path: string,
+    init: RequestInit,
+    retryOnUnauthorized = true
+  ): Promise<T> {
+    const res = await fetch(url, init)
+
+    if (res.status === 401 && retryOnUnauthorized && path !== '/auth/refresh') {
+      let accessToken: string
+      try {
+        accessToken = await this.refreshAccessToken()
+      } catch {
+        this.clearAuthAndRedirect()
+        throw new Error('Unauthorized')
+      }
+
+      const headers = new Headers(init.headers)
+      headers.set('Authorization', `Bearer ${accessToken}`)
+      const retryRes = await fetch(url, { ...init, headers })
+      if (retryRes.status === 401) {
+        this.clearAuthAndRedirect()
+      }
+      return this.parseResponse<T>(retryRes)
+    }
+
+    return this.parseResponse<T>(res)
+  }
+
   async get<T>(path: string, params?: Record<string, string | number | boolean | null | undefined>): Promise<T> {
     const url = new URL(this.resolveUrl(path))
     if (params) {
@@ -72,46 +140,41 @@ class ApiClient {
         }
       })
     }
-    const res = await fetch(url.toString(), {
+    return this.requestUrl<T>(url.toString(), path, {
       method: 'GET',
       headers: this.getHeaders(),
     })
-    return this.handleResponse<T>(res)
   }
 
   async post<T>(path: string, body?: unknown): Promise<T> {
-    const res = await fetch(this.resolveUrl(path), {
+    return this.request<T>(path, {
       method: 'POST',
       headers: this.getHeaders(),
       body: body !== undefined ? JSON.stringify(body) : undefined,
-    })
-    return this.handleResponse<T>(res)
+    }, path !== '/auth/login' && path !== '/auth/refresh')
   }
 
   async put<T>(path: string, body?: unknown): Promise<T> {
-    const res = await fetch(this.resolveUrl(path), {
+    return this.request<T>(path, {
       method: 'PUT',
       headers: this.getHeaders(),
       body: body !== undefined ? JSON.stringify(body) : undefined,
     })
-    return this.handleResponse<T>(res)
   }
 
   async patch<T>(path: string, body?: unknown): Promise<T> {
-    const res = await fetch(this.resolveUrl(path), {
+    return this.request<T>(path, {
       method: 'PATCH',
       headers: this.getHeaders(),
       body: body !== undefined ? JSON.stringify(body) : undefined,
     })
-    return this.handleResponse<T>(res)
   }
 
   async delete<T>(path: string): Promise<T> {
-    const res = await fetch(this.resolveUrl(path), {
+    return this.request<T>(path, {
       method: 'DELETE',
       headers: this.getHeaders(),
     })
-    return this.handleResponse<T>(res)
   }
 
   async raw(path: string, init: RequestInit = {}): Promise<Response> {
@@ -121,10 +184,24 @@ class ApiClient {
       headers.set('Authorization', `Bearer ${tokens.accessToken}`)
     }
 
-    return fetch(this.resolveUrl(path), {
+    const requestInit = {
       ...init,
       headers,
-    })
+    }
+    const res = await fetch(this.resolveUrl(path), requestInit)
+
+    if (res.status !== 401 || path === '/auth/refresh') {
+      return res
+    }
+
+    try {
+      const accessToken = await this.refreshAccessToken()
+      headers.set('Authorization', `Bearer ${accessToken}`)
+      return fetch(this.resolveUrl(path), requestInit)
+    } catch {
+      this.clearAuthAndRedirect()
+      return res
+    }
   }
 }
 

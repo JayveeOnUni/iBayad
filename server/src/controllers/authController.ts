@@ -8,6 +8,11 @@ import type { AuthPayload } from '../middleware/auth'
 import { buildClientUrl } from '../config/environment'
 import { sendPasswordResetEmail } from '../services/emailService'
 import { logger } from '../utils/logger'
+import {
+  normalizeLoginEmail,
+  recordFailedLogin,
+  recordSuccessfulLogin,
+} from '../middleware/loginRateLimiter'
 
 function positiveIntegerEnv(name: string, fallback: number, minimum: number): number {
   const rawValue = process.env[name]
@@ -46,7 +51,8 @@ function signRefreshToken(payload: AuthPayload): string {
 }
 
 export const login = asyncHandler(async (req: Request, res: Response) => {
-  const { email, password } = req.body
+  const email = normalizeLoginEmail(req.body.email)
+  const password = typeof req.body.password === 'string' ? req.body.password : ''
 
   if (!email || !password) {
     throw createError('Email and password are required', 400)
@@ -54,27 +60,36 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
 
   // Fetch user
   const result = await pool.query(
-    `SELECT u.*, e.id AS employee_id, e.first_name, e.last_name
+    `SELECT u.*, e.id AS employee_id, e.first_name, e.last_name,
+            e.employment_status, e.is_deleted
      FROM users u
      LEFT JOIN employees e ON u.employee_id = e.id
-     WHERE u.email = $1`,
+     WHERE LOWER(u.email) = LOWER($1)`,
     [email]
   )
 
   const user = result.rows[0]
   if (!user) {
+    recordFailedLogin(req, email)
     throw createError('Invalid email or password', 401)
   }
 
   if (!user.password_hash && user.activation_token_hash) {
+    recordFailedLogin(req, email)
     throw createError('Activate your account before signing in', 403)
   }
   if (!user.is_active || !user.password_hash) {
+    recordFailedLogin(req, email)
     throw createError('Account is inactive', 403)
+  }
+  if (user.role === 'employee' && (user.is_deleted || user.employment_status !== 'active')) {
+    recordFailedLogin(req, email)
+    throw createError('Employee account is inactive', 403)
   }
 
   const isMatch = await bcrypt.compare(password, user.password_hash)
   if (!isMatch) {
+    recordFailedLogin(req, email)
     throw createError('Invalid email or password', 401)
   }
 
@@ -93,6 +108,8 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
     `UPDATE users SET refresh_token_hash = $1, last_login_at = NOW() WHERE id = $2`,
     [await bcrypt.hash(refreshToken, 8), user.id]
   )
+
+  recordSuccessfulLogin(req, email)
 
   res.json({
     success: true,
@@ -349,9 +366,19 @@ export const refreshToken = asyncHandler(async (req: Request, res: Response) => 
     throw createError('Invalid or expired refresh token', 401)
   }
 
-  const result = await pool.query('SELECT * FROM users WHERE id = $1', [decoded.userId])
+  const result = await pool.query(
+    `SELECT u.*, e.employment_status, e.is_deleted
+     FROM users u
+     LEFT JOIN employees e ON e.id = u.employee_id
+     WHERE u.id = $1`,
+    [decoded.userId]
+  )
   const user = result.rows[0]
   if (!user || !user.refresh_token_hash) throw createError('Session not found', 401)
+  if (!user.is_active) throw createError('Account is inactive', 401)
+  if (user.role === 'employee' && (user.is_deleted || user.employment_status !== 'active')) {
+    throw createError('Employee account is inactive', 403)
+  }
 
   const isValid = await bcrypt.compare(token, user.refresh_token_hash)
   if (!isValid) throw createError('Invalid refresh token', 401)

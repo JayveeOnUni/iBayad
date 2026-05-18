@@ -95,6 +95,10 @@ const migrations = [
     name: '022_profile_update_requests',
     file: 'src/db/add-profile-update-requests.sql',
   },
+  {
+    name: '023_employee_account_lifecycle',
+    file: 'src/db/add-employee-account-lifecycle.sql',
+  },
 ]
 
 function resolveSqlFile(relativeFile) {

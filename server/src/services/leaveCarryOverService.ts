@@ -14,7 +14,7 @@ export class LeaveCarryOverService {
     const sickType = await LeavePolicyService.getLeaveTypeByCode('SICK')
     if (!vacationType || !sickType) throw new Error('Vacation and sick leave types must be seeded first.')
 
-    const employees = await pool.query(`SELECT id FROM employees WHERE employment_status = 'active'`)
+    const employees = await pool.query(`SELECT id FROM employees WHERE employment_status = 'active' AND is_deleted = false`)
     let processed = 0
     let forfeited = 0
     let carriedOver = 0

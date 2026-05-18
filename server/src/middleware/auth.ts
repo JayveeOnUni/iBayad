@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express'
 import jwt from 'jsonwebtoken'
+import pool from '../utils/db'
 
 export interface AuthPayload {
   userId: string
@@ -63,7 +64,7 @@ declare global {
 /**
  * Middleware: verify JWT access token and attach decoded payload to req.user.
  */
-export function authenticate(req: Request, res: Response, next: NextFunction): void {
+export async function authenticate(req: Request, res: Response, next: NextFunction): Promise<void> {
   const authHeader = req.headers.authorization
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -81,13 +82,31 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
 
   try {
     const decoded = jwt.verify(token, secret) as AuthPayload
+    const account = await pool.query(
+      `SELECT u.is_active, e.employment_status, e.is_deleted
+       FROM users u
+       LEFT JOIN employees e ON e.id = u.employee_id
+       WHERE u.id = $1`,
+      [decoded.userId]
+    )
+    const user = account.rows[0]
+    if (!user || !user.is_active) {
+      res.status(401).json({ success: false, message: 'Account is inactive' })
+      return
+    }
+    if (decoded.role === 'employee' && (user.is_deleted || user.employment_status !== 'active')) {
+      res.status(403).json({ success: false, message: 'Employee account is inactive' })
+      return
+    }
     req.user = decoded
     next()
   } catch (err) {
     if (err instanceof jwt.TokenExpiredError) {
       res.status(401).json({ success: false, message: 'Token expired' })
-    } else {
+    } else if (err instanceof jwt.JsonWebTokenError) {
       res.status(401).json({ success: false, message: 'Invalid token' })
+    } else {
+      next(err)
     }
   }
 }

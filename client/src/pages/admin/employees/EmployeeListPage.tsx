@@ -27,7 +27,8 @@ interface ActivationFollowUp {
 export default function EmployeeListPage() {
   const navigate = useNavigate()
   const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState('active')
+  const [includeArchived, setIncludeArchived] = useState(false)
   const [page, setPage] = useState(1)
   const [totalEmployees, setTotalEmployees] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
@@ -49,6 +50,8 @@ export default function EmployeeListPage() {
         limit: 10,
         search: search || undefined,
         status: statusFilter || undefined,
+        includeFormer: statusFilter !== 'active',
+        includeArchived,
       })
       setEmployees(res.data)
       setTotalEmployees(res.total)
@@ -58,7 +61,7 @@ export default function EmployeeListPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [page, search, statusFilter])
+  }, [page, search, statusFilter, includeArchived])
 
   useEffect(() => {
     void loadEmployees()
@@ -118,6 +121,8 @@ export default function EmployeeListPage() {
         limit: 100,
         search: search || undefined,
         status: statusFilter || undefined,
+        includeFormer: statusFilter !== 'active',
+        includeArchived,
       })
       const allEmployees = [...firstPage.data]
 
@@ -127,6 +132,8 @@ export default function EmployeeListPage() {
           limit: 100,
           search: search || undefined,
           status: statusFilter || undefined,
+          includeFormer: statusFilter !== 'active',
+          includeArchived,
         })
         allEmployees.push(...res.data)
       }
@@ -249,12 +256,25 @@ export default function EmployeeListPage() {
             }}
             className="md:w-48"
           >
-            <option value="">All statuses</option>
-            <option value="active">Active</option>
+            <option value="active">Active employees</option>
+            <option value="all">All non-archived</option>
             <option value="inactive">Inactive</option>
             <option value="resigned">Resigned</option>
             <option value="terminated">Terminated</option>
+            <option value="end_of_contract">End of Contract</option>
           </Select>
+          <label className="flex items-center gap-2 text-sm text-ink">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-border text-brand focus:ring-brand-200"
+              checked={includeArchived}
+              onChange={(event) => {
+                setIncludeArchived(event.target.checked)
+                setPage(1)
+              }}
+            />
+            Include archived
+          </label>
         </div>
 
         <Table
@@ -316,11 +336,12 @@ export default function EmployeeListPage() {
                   inactive: 'neutral',
                   resigned: 'neutral',
                   terminated: 'danger',
-                  on_leave: 'warning',
+                  end_of_contract: 'warning',
                 }
+                const label = row.isDeleted ? 'Archived' : row.employmentStatus.replace(/_/g, ' ')
                 return (
                   <Badge variant={variantMap[row.employmentStatus] ?? 'neutral'} dot>
-                    {row.employmentStatus.replace('_', ' ')}
+                    {label}
                   </Badge>
                 )
               },

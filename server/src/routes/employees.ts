@@ -6,6 +6,8 @@ import {
   updateEmployee,
   deactivateEmployee,
   activateEmployee,
+  separateEmployee,
+  permanentlyDeleteEmployee,
   resendEmployeeActivation,
 } from '../controllers/employeeController'
 import { getEmployeeDashboard } from '../controllers/employeeDashboardController'
@@ -53,7 +55,9 @@ router.post('/', requireRole('admin'), createEmployee)
 router.get('/:id', requireRole('admin'), getEmployee)
 router.put('/:id', requireRole('admin'), updateEmployee)
 router.post('/:id/resend-activation', requireRole('admin'), resendEmployeeActivation)
+router.put('/:id/separation', requireRole('admin'), separateEmployee)
 router.put('/:id/activate', requireRole('admin'), activateEmployee)
+router.delete('/:id/permanent', requireRole('admin'), permanentlyDeleteEmployee)
 router.delete('/:id', requireRole('admin'), deactivateEmployee)
 
 export default router

@@ -11,10 +11,11 @@ import {
   verifyActivationToken,
 } from '../controllers/authController'
 import { authenticate } from '../middleware/auth'
+import { loginRateLimiter } from '../middleware/loginRateLimiter'
 
 const router = Router()
 
-router.post('/login', login)
+router.post('/login', loginRateLimiter, login)
 router.post('/activate/verify', verifyActivationToken)
 router.post('/activate', activateAccount)
 router.post('/forgot-password', forgotPassword)

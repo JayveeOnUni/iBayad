@@ -16,6 +16,7 @@ export interface PayrollReportFilters {
   employeeId?: string
   departmentId?: string
   status?: string
+  employmentStatus?: string
   startDate?: string
   endDate?: string
   search?: string
@@ -305,6 +306,8 @@ export async function buildPayslipPayload(
       snapshotHash: record.snapshot_hash,
       snapshotVersion: record.snapshot_version,
       formulaVersion: record.formula_version ?? record.statutory_rule_version ?? 'not recorded',
+      statutoryRuleVersion: record.statutory_rule_version ?? 'not recorded',
+      statutoryRuleVersions: record.statutory_rule_versions ?? {},
       generatedDateTime: new Date().toISOString(),
       isLocked: Boolean(record.is_locked),
     },
@@ -329,6 +332,10 @@ function buildRecordFilters(
   if (filters.status && filters.status !== 'all') {
     values.push(filters.status)
     conditions.push(`${alias}.status = $${values.length}`)
+  }
+  if (filters.employmentStatus && filters.employmentStatus !== 'all') {
+    values.push(filters.employmentStatus)
+    conditions.push(`e.employment_status = $${values.length}`)
   }
   if (filters.search) {
     values.push(`%${filters.search}%`)
@@ -605,6 +612,7 @@ export async function generatePayslipPdf(payload: PayslipPayload): Promise<Buffe
       ['Released date', payload.metadata.releasedDate ? new Date(String(payload.metadata.releasedDate)).toLocaleString('en-PH') : 'Not recorded'],
       ['Snapshot ID', String(payload.metadata.calculationSnapshotId ?? 'Not recorded')],
       ['Formula/rule version', String(payload.metadata.formulaVersion ?? 'Not recorded')],
+      ['Statutory rules', String(payload.metadata.statutoryRuleVersion ?? 'Not recorded')],
     ] as const
     metadataRows.forEach((row, index) => {
       addPdfRow(doc, row[0], row[1], index % 2 === 0 ? left : right, y + Math.floor(index / 2) * 14, sectionWidth)

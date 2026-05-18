@@ -109,6 +109,7 @@ export class PayrollPeriodModel {
            SELECT COUNT(*)::int AS active_employee_count
            FROM employees
            WHERE employment_status = 'active'
+             AND is_deleted = false
          ),
          summaries AS (
            SELECT payroll_period_id,
@@ -155,6 +156,7 @@ export class PayrollPeriodModel {
          SELECT COUNT(*)::int AS active_employee_count
          FROM employees
          WHERE employment_status = 'active'
+           AND is_deleted = false
        ),
        summaries AS (
          SELECT payroll_period_id,

@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from 'pg'
 import pool from './db'
+import { logger } from './logger'
 
 export type PayFrequency = 'weekly' | 'semi-monthly' | 'monthly'
 
@@ -528,6 +529,16 @@ export async function computeGovernmentDeductionsForPeriod(
     ])
 
     if (!sssRule || !philHealthRule || !pagIBIGRule || !birRule) {
+      logger.warn('Statutory rule database lookup incomplete; using code fallback rules.', {
+        periodEndDate: asDateOnly(input.periodEndDate),
+        payFrequency: input.payFrequency,
+        missingRules: {
+          sss: !sssRule,
+          philHealth: !philHealthRule,
+          pagIBIG: !pagIBIGRule,
+          bir: !birRule,
+        },
+      })
       return computeGovernmentDeductions(input)
     }
 
@@ -545,6 +556,11 @@ export async function computeGovernmentDeductionsForPeriod(
       }
     )
   } catch (err) {
+    logger.warn('Statutory rule database lookup failed; using code fallback rules.', {
+      periodEndDate: asDateOnly(input.periodEndDate),
+      payFrequency: input.payFrequency,
+      error: err,
+    })
     return computeGovernmentDeductions(input)
   }
 }

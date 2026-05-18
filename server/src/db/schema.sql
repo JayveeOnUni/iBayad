@@ -8,7 +8,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- ─── Enums ───────────────────────────────────────────────────────────────────
 
 CREATE TYPE employment_type AS ENUM ('regular', 'probationary', 'contractual', 'part_time');
-CREATE TYPE employment_status AS ENUM ('active', 'inactive', 'terminated', 'resigned');
+CREATE TYPE employment_status AS ENUM ('active', 'inactive', 'terminated', 'resigned', 'end_of_contract');
 CREATE TYPE gender_type AS ENUM ('male', 'female', 'other');
 CREATE TYPE civil_status AS ENUM ('single', 'married', 'widowed', 'separated');
 CREATE TYPE pay_frequency AS ENUM ('weekly', 'semi-monthly', 'monthly');
@@ -92,7 +92,15 @@ CREATE TABLE employees (
   employment_status    employment_status DEFAULT 'active',
   hire_date            DATE NOT NULL,
   regularization_date  DATE,
+  last_working_day     DATE,
   separation_date      DATE,
+  separation_reason    TEXT,
+  separation_remarks   TEXT,
+  separation_processed_by UUID,
+  separation_processed_at TIMESTAMPTZ,
+  is_deleted           BOOLEAN NOT NULL DEFAULT false,
+  deleted_at           TIMESTAMPTZ,
+  deleted_by           UUID,
   -- Salary
   basic_salary         NUMERIC(12,2) NOT NULL,
   daily_rate           NUMERIC(10,4),
@@ -396,6 +404,12 @@ CREATE TABLE attendance_requests (
   updated_at            TIMESTAMPTZ DEFAULT NOW()
 );
 
+ALTER TABLE employees ADD CONSTRAINT fk_employees_separation_processed_by
+  FOREIGN KEY (separation_processed_by) REFERENCES users(id);
+
+ALTER TABLE employees ADD CONSTRAINT fk_employees_deleted_by
+  FOREIGN KEY (deleted_by) REFERENCES users(id);
+
 CREATE TABLE profile_update_requests (
   id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   employee_id           UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
@@ -594,6 +608,8 @@ CREATE TABLE system_settings (
 
 CREATE INDEX idx_employees_department ON employees(department_id);
 CREATE INDEX idx_employees_status ON employees(employment_status);
+CREATE INDEX idx_employees_active_directory ON employees(employment_status, is_deleted, last_name, first_name);
+CREATE INDEX idx_employees_archived ON employees(is_deleted, deleted_at DESC);
 CREATE INDEX idx_users_activation_token_hash ON users(activation_token_hash) WHERE activation_token_hash IS NOT NULL;
 CREATE INDEX idx_users_password_reset_token_hash ON users(password_reset_token_hash) WHERE password_reset_token_hash IS NOT NULL;
 CREATE UNIQUE INDEX idx_work_shifts_normalized_name_unique ON work_shifts (LOWER(TRIM(name)));

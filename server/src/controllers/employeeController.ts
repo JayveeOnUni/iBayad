@@ -27,12 +27,14 @@ const MAX_BASIC_SALARY = 10000000
 const GENDER_VALUES = ['male', 'female', 'other'] as const
 const CIVIL_STATUS_VALUES = ['single', 'married', 'widowed', 'separated'] as const
 const EMPLOYMENT_TYPE_VALUES = ['regular', 'probationary', 'contractual', 'part_time'] as const
-const EMPLOYEE_STATUS_VALUES = ['active', 'inactive', 'terminated', 'resigned'] as const
+const EMPLOYEE_STATUS_VALUES = ['active', 'inactive', 'terminated', 'resigned', 'end_of_contract'] as const
+const SEPARATION_STATUS_VALUES = ['inactive', 'terminated', 'resigned', 'end_of_contract'] as const
 
 type GenderValue = typeof GENDER_VALUES[number]
 type CivilStatusValue = typeof CIVIL_STATUS_VALUES[number]
 type EmploymentTypeValue = typeof EMPLOYMENT_TYPE_VALUES[number]
 type EmployeeStatusValue = typeof EMPLOYEE_STATUS_VALUES[number]
+type SeparationStatusValue = typeof SEPARATION_STATUS_VALUES[number]
 
 interface NormalizedEmployeeCreateInput {
   firstName: string
@@ -65,6 +67,8 @@ interface NormalizedEmployeeCreateInput {
   bankName: string | null
   bankAccountNumber: string | null
 }
+
+type EmployeeUpdateData = Partial<EmployeeRow>
 
 function positiveIntegerEnv(name: string, fallback: number, minimum: number): number {
   const rawValue = process.env[name]
@@ -227,6 +231,29 @@ function requiredPositiveNumber(value: unknown, field: string, label: string, er
   return number ?? 0
 }
 
+function updatePositiveNumber(value: unknown, field: string, label: string, errors: ValidationErrors): number | undefined {
+  if (value === undefined) return undefined
+  const number = Number(value)
+  if (!Number.isFinite(number)) {
+    addFieldError(errors, field, `${label} must be a valid number`)
+    return undefined
+  }
+  if (number <= 0) {
+    addFieldError(errors, field, `${label} must be greater than 0`)
+    return undefined
+  }
+  return number
+}
+
+function updatePositiveInteger(value: unknown, field: string, label: string, errors: ValidationErrors): number | undefined {
+  const number = updatePositiveNumber(value, field, label, errors)
+  if (number !== undefined && !Number.isInteger(number)) {
+    addFieldError(errors, field, `${label} must be a whole number`)
+    return undefined
+  }
+  return number
+}
+
 function optionalGovernmentIdValue(value: unknown, field: string, label: string, errors: ValidationErrors): string | null {
   const normalized = emptyToNull(value)
   if (!normalized) return null
@@ -258,6 +285,76 @@ function requiredDate(value: unknown, fieldName: string): string {
   if (!date) throw createError(`${fieldName} is required`, 400)
   if (!isDateOnly(date)) throw createError(`${fieldName} must be a valid date in YYYY-MM-DD format`, 400)
   return date
+}
+
+function optionalDate(value: unknown, fieldName: string): string | null {
+  const date = emptyToNull(value)
+  if (!date) return null
+  if (!isDateOnly(date)) throw createError(`${fieldName} must be a valid date in YYYY-MM-DD format`, 400)
+  return date
+}
+
+function boolFromQuery(value: unknown): boolean {
+  return String(value ?? '').toLowerCase() === 'true'
+}
+
+function normalizeSeparationStatus(value: unknown, fallback: SeparationStatusValue): SeparationStatusValue {
+  const normalized = emptyToNull(value) ?? fallback
+  if (!SEPARATION_STATUS_VALUES.includes(normalized as SeparationStatusValue)) {
+    throw createError(`Employee status must be one of: ${SEPARATION_STATUS_VALUES.join(', ')}`, 400)
+  }
+  return normalized as SeparationStatusValue
+}
+
+function requireSeparationText(value: unknown, fieldName: string): string {
+  const normalized = emptyToNull(value)
+  if (!normalized) throw createError(`${fieldName} is required`, 400)
+  return normalized
+}
+
+async function employeeHistoryCounts(employeeId: string) {
+  const result = await pool.query(
+    `SELECT
+       (SELECT COUNT(*)::int FROM payroll_records WHERE employee_id = $1) AS payroll_records,
+       (SELECT COUNT(*)::int FROM attendance WHERE employee_id = $1) AS attendance_records,
+       (SELECT COUNT(*)::int FROM leave_requests WHERE employee_id = $1) AS leave_requests,
+       (SELECT COUNT(*)::int FROM loans WHERE employee_id = $1) AS loans,
+       (SELECT COUNT(*)::int FROM payroll_loan_deductions WHERE employee_id = $1) AS loan_deductions,
+       (SELECT COUNT(*)::int FROM payroll_calculation_snapshots WHERE employee_id = $1) AS payroll_snapshots,
+       (SELECT COUNT(*)::int FROM payroll_audit_logs WHERE employee_id = $1) AS payroll_audit_logs,
+       (SELECT COUNT(*)::int FROM offset_credits WHERE employee_id = $1) AS offset_credits,
+       (SELECT COUNT(*)::int FROM offset_usages WHERE employee_id = $1) AS offset_usages,
+       (SELECT COUNT(*)::int FROM profile_update_requests WHERE employee_id = $1) AS profile_update_requests`,
+    [employeeId]
+  )
+  return result.rows[0] as Record<string, number>
+}
+
+function hasProtectedHistory(counts: Record<string, number>): boolean {
+  return Object.values(counts).some((value) => Number(value) > 0)
+}
+
+async function insertEmployeeAuditLog(params: {
+  action: string
+  employeeId: string
+  userId: string
+  oldValues: Record<string, unknown>
+  newValues: Record<string, unknown>
+  req: Request
+}, db: Pick<typeof pool, 'query'> = pool) {
+  await db.query(
+    `INSERT INTO audit_logs (user_id, action, entity, entity_id, old_values, new_values, ip_address, user_agent)
+     VALUES ($1, $2, 'employee', $3, $4, $5, $6, $7)`,
+    [
+      params.userId,
+      params.action,
+      params.employeeId,
+      params.oldValues,
+      params.newValues,
+      params.req.ip,
+      params.req.get('user-agent') ?? null,
+    ]
+  )
 }
 
 function roundRate(value: number): number {
@@ -347,6 +444,65 @@ async function validateEmployeeReferences(input: {
   return {
     shiftWorkHours: shift ? numberFromSetting(shift.work_hours) : null,
   }
+}
+
+async function validateEmployeeUpdateReferences(input: {
+  existing: EmployeeRow
+  data: EmployeeUpdateData
+}): Promise<{ shiftWorkHours: number | null }> {
+  const referencesChanged = (
+    input.data.department_id !== undefined ||
+    input.data.position_id !== undefined ||
+    input.data.shift_id !== undefined
+  )
+  if (!referencesChanged) return { shiftWorkHours: null }
+
+  const departmentId = input.data.department_id ?? input.existing.department_id
+  const positionId = input.data.position_id ?? input.existing.position_id
+  const shiftId = input.data.shift_id ?? input.existing.shift_id ?? null
+  const errors: ValidationErrors = {}
+
+  if (!departmentId) addFieldError(errors, 'departmentId', 'Department is required')
+  if (!positionId) addFieldError(errors, 'positionId', 'Position is required')
+  if (hasValidationErrors(errors)) throwValidationError(errors)
+
+  return validateEmployeeReferences({
+    departmentId: String(departmentId),
+    positionId: String(positionId),
+    shiftId: shiftId ? String(shiftId) : null,
+  })
+}
+
+async function applyEmployeeRateUpdates(
+  data: EmployeeUpdateData,
+  existing: EmployeeRow,
+  shiftWorkHours: number | null
+): Promise<void> {
+  const rateInputsChanged = (
+    data.basic_salary !== undefined ||
+    data.work_days_per_month !== undefined ||
+    data.work_hours_per_day !== undefined
+  )
+  const shiftChangedWithoutExplicitHours = data.shift_id !== undefined && data.work_hours_per_day === undefined
+  if (!rateInputsChanged && !shiftChangedWithoutExplicitHours) return
+
+  const defaults = await getRateDefaults()
+  const basicSalary = data.basic_salary !== undefined
+    ? Number(data.basic_salary)
+    : Number(existing.basic_salary)
+  const workDaysPerMonth = data.work_days_per_month !== undefined
+    ? Number(data.work_days_per_month)
+    : numberFromSetting(existing.work_days_per_month) ?? defaults.workDaysPerMonth
+  const workHoursPerDay = data.work_hours_per_day !== undefined
+    ? Number(data.work_hours_per_day)
+    : shiftWorkHours ?? numberFromSetting(existing.work_hours_per_day) ?? defaults.workHoursPerDay
+  const rates = calculateRates(basicSalary, workDaysPerMonth, workHoursPerDay)
+
+  data.basic_salary = basicSalary
+  data.work_days_per_month = workDaysPerMonth
+  data.work_hours_per_day = workHoursPerDay
+  data.daily_rate = rates.dailyRate
+  data.hourly_rate = rates.hourlyRate
 }
 
 async function normalizeCreateEmployeeInput(body: Record<string, unknown>): Promise<NormalizedEmployeeCreateInput> {
@@ -654,6 +810,8 @@ export const listEmployees = asyncHandler(async (req: Request, res: Response) =>
     search: req.query.search as string | undefined,
     departmentId: req.query.departmentId as string | undefined,
     status: req.query.status as string | undefined,
+    includeArchived: boolFromQuery(req.query.includeArchived),
+    includeFormer: boolFromQuery(req.query.includeFormer) || boolFromQuery(req.query.includeArchived),
   })
 
   res.json({
@@ -790,6 +948,8 @@ export const resendEmployeeActivation = asyncHandler(async (req: Request, res: R
     first_name: string
     last_name: string
     email: string
+    employment_status: string
+    is_deleted: boolean
   } | undefined
   let activationLink = ''
   let activationEmailTrackingSaved = false
@@ -799,7 +959,7 @@ export const resendEmployeeActivation = asyncHandler(async (req: Request, res: R
 
     const result = await client.query(
       `SELECT u.id AS user_id, u.activated_at, u.password_hash,
-              e.first_name, e.last_name, e.email
+              e.first_name, e.last_name, e.email, e.employment_status, e.is_deleted
        FROM employees e
        JOIN users u ON u.employee_id = e.id
        WHERE e.id = $1 AND u.role = 'employee'
@@ -809,6 +969,9 @@ export const resendEmployeeActivation = asyncHandler(async (req: Request, res: R
 
     account = result.rows[0]
     if (!account) throw createError('Employee account not found', 404)
+    if (account.is_deleted || account.employment_status !== 'active') {
+      throw createError('Activation cannot be resent for inactive, separated, or archived employees.', 400)
+    }
     if (account.activated_at || account.password_hash) throw createError('Employee account is already activated', 400)
 
     await client.query(
@@ -858,7 +1021,26 @@ export const updateEmployee = asyncHandler(async (req: Request, res: Response) =
   const existing = await EmployeeModel.findById(req.params.id)
   if (!existing) throw createError('Employee not found', 404)
 
-  const body = req.body
+  const body = (req.body ?? {}) as Record<string, unknown>
+  const errors: ValidationErrors = {}
+  const salaryInput = body.basicSalary === undefined ? body.monthlySalary ?? body.basic_salary : body.basicSalary
+  const workDaysInput = body.workDaysPerMonth === undefined ? body.work_days_per_month : body.workDaysPerMonth
+  const workHoursInput = body.workHoursPerDay === undefined ? body.work_hours_per_day : body.workHoursPerDay
+  const basicSalary = updatePositiveNumber(salaryInput, 'basicSalary', 'Monthly salary', errors)
+  const workDaysPerMonth = updatePositiveInteger(workDaysInput, 'workDaysPerMonth', 'Work days per month', errors)
+  const workHoursPerDay = updatePositiveNumber(workHoursInput, 'workHoursPerDay', 'Work hours per day', errors)
+
+  if (basicSalary !== undefined && basicSalary > MAX_BASIC_SALARY) {
+    addFieldError(errors, 'basicSalary', `Monthly salary must not exceed ${MAX_BASIC_SALARY.toLocaleString('en-US')}`)
+  }
+  if (workDaysPerMonth !== undefined && workDaysPerMonth > MAX_WORK_DAYS_PER_MONTH) {
+    addFieldError(errors, 'workDaysPerMonth', `Work days per month must not exceed ${MAX_WORK_DAYS_PER_MONTH}`)
+  }
+  if (workHoursPerDay !== undefined && workHoursPerDay > MAX_WORK_HOURS_PER_DAY) {
+    addFieldError(errors, 'workHoursPerDay', `Work hours per day must not exceed ${MAX_WORK_HOURS_PER_DAY}`)
+  }
+  if (hasValidationErrors(errors)) throwValidationError(errors)
+
   const data = {
     first_name: body.firstName,
     middle_name: body.middleName,
@@ -876,7 +1058,9 @@ export const updateEmployee = asyncHandler(async (req: Request, res: Response) =
     position_id: emptyToNullIfPresent(body.positionId),
     employment_type: body.employmentType,
     hire_date: body.hireDate === undefined ? undefined : requiredDate(body.hireDate, 'hireDate'),
-    basic_salary: body.basicSalary,
+    basic_salary: basicSalary,
+    work_days_per_month: workDaysPerMonth,
+    work_hours_per_day: workHoursPerDay,
     sss_number: optionalGovernmentIdIfPresent(body.sssNumber, 'SSS Number'),
     philhealth_number: optionalGovernmentIdIfPresent(body.philhealthNumber, 'PhilHealth Number'),
     pagibig_number: optionalGovernmentIdIfPresent(body.pagibigNumber, 'Pag-IBIG Number'),
@@ -886,26 +1070,350 @@ export const updateEmployee = asyncHandler(async (req: Request, res: Response) =
     shift_id: emptyToNullIfPresent(body.shiftId),
   }
   const sanitized = Object.fromEntries(Object.entries(data).filter(([, value]) => value !== undefined))
-  const updated = await EmployeeModel.update(req.params.id, sanitized as never)
+  const shiftValidation = await validateEmployeeUpdateReferences({
+    existing,
+    data: sanitized as EmployeeUpdateData,
+  })
+  await applyEmployeeRateUpdates(sanitized as EmployeeUpdateData, existing, shiftValidation.shiftWorkHours)
+
+  if (Object.keys(sanitized).length > 0) {
+    await EmployeeModel.update(req.params.id, sanitized as EmployeeUpdateData)
+  }
+  const updated = await EmployeeModel.findById(req.params.id)
   res.json({ success: true, data: updated })
 })
 
 export const deactivateEmployee = asyncHandler(async (req: Request, res: Response) => {
-  const employee = await EmployeeModel.findById(req.params.id)
-  if (!employee) throw createError('Employee not found', 404)
+  const body = (req.body ?? {}) as Record<string, unknown>
+  const status = normalizeSeparationStatus(body.status ?? body.employeeStatus, 'inactive')
+  const reason = emptyToNull(body.reasonForLeaving ?? body.reason) ?? 'Archived employee account'
+  const remarks = emptyToNull(body.remarks)
+  const lastWorkingDay = optionalDate(body.lastWorkingDay, 'lastWorkingDay')
+  const separationDate = optionalDate(body.separationDate, 'separationDate') ?? lastWorkingDay
 
-  const updated = await EmployeeModel.update(req.params.id, {
-    employment_status: 'inactive',
-  } as never)
-  res.json({ success: true, data: updated })
+  const client = await pool.connect()
+  let updated: EmployeeRow | undefined
+  let oldValues: Record<string, unknown> | undefined
+  try {
+    await client.query('BEGIN')
+
+    const existing = await client.query(
+      `SELECT *
+       FROM employees
+       WHERE id = $1
+       FOR UPDATE`,
+      [req.params.id]
+    )
+    const employee = existing.rows[0] as EmployeeRow | undefined
+    if (!employee) throw createError('Employee not found', 404)
+
+    oldValues = {
+      employment_status: employee.employment_status,
+      is_deleted: employee.is_deleted,
+      deleted_at: employee.deleted_at,
+      deleted_by: employee.deleted_by,
+      last_working_day: employee.last_working_day,
+      separation_date: employee.separation_date,
+      separation_reason: employee.separation_reason,
+      separation_remarks: employee.separation_remarks,
+    }
+
+    const archiveResult = await client.query(
+      `UPDATE employees
+       SET employment_status = $2,
+           last_working_day = COALESCE($3, last_working_day),
+           separation_date = COALESCE($4, separation_date),
+           separation_reason = COALESCE($5, separation_reason),
+           separation_remarks = COALESCE($6, separation_remarks),
+           separation_processed_by = $7,
+           separation_processed_at = NOW(),
+           is_deleted = true,
+           deleted_at = NOW(),
+           deleted_by = $7,
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [req.params.id, status, lastWorkingDay, separationDate, reason, remarks, req.user!.userId]
+    )
+    updated = archiveResult.rows[0]
+
+    await client.query(
+      `UPDATE users
+       SET is_active = false,
+           refresh_token_hash = NULL,
+           activation_token_hash = NULL,
+           activation_token_expires_at = NULL,
+           password_reset_token_hash = NULL,
+           password_reset_token_expires_at = NULL,
+           updated_at = NOW()
+       WHERE employee_id = $1`,
+      [req.params.id]
+    )
+
+    await insertEmployeeAuditLog({
+      action: 'employee_archived',
+      employeeId: req.params.id,
+      userId: req.user!.userId,
+      oldValues,
+      newValues: {
+        employment_status: status,
+        is_deleted: true,
+        reason,
+        remarks,
+        last_working_day: lastWorkingDay,
+        separation_date: separationDate,
+      },
+      req,
+    }, client)
+
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+
+  updated = await EmployeeModel.findById(req.params.id)
+  res.json({
+    success: true,
+    data: updated,
+    message: 'Employee archived. Login access has been disabled and history remains available for audit.',
+  })
 })
 
 export const activateEmployee = asyncHandler(async (req: Request, res: Response) => {
+  const client = await pool.connect()
+  let updated: EmployeeRow | undefined
+  let oldValues: Record<string, unknown> | undefined
+  let loginAccessRestored = false
+  let activationRequired = false
+  try {
+    await client.query('BEGIN')
+
+    const existing = await client.query(
+      `SELECT *
+       FROM employees
+       WHERE id = $1
+       FOR UPDATE`,
+      [req.params.id]
+    )
+    const employee = existing.rows[0] as EmployeeRow | undefined
+    if (!employee) throw createError('Employee not found', 404)
+
+    oldValues = {
+      employment_status: employee.employment_status,
+      is_deleted: employee.is_deleted,
+      deleted_at: employee.deleted_at,
+      deleted_by: employee.deleted_by,
+      last_working_day: employee.last_working_day,
+      separation_date: employee.separation_date,
+      separation_reason: employee.separation_reason,
+      separation_remarks: employee.separation_remarks,
+    }
+
+    const result = await client.query(
+      `UPDATE employees
+       SET employment_status = 'active',
+           is_deleted = false,
+           deleted_at = NULL,
+           deleted_by = NULL,
+           last_working_day = NULL,
+           separation_date = NULL,
+           separation_reason = NULL,
+           separation_remarks = NULL,
+           separation_processed_by = $2,
+           separation_processed_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [req.params.id, req.user!.userId]
+    )
+    updated = result.rows[0]
+
+    const userResult = await client.query(
+      `WITH existing_users AS (
+         SELECT id, password_hash, is_active
+         FROM users
+         WHERE employee_id = $1
+       ),
+       updated_users AS (
+         UPDATE users u
+         SET is_active = u.password_hash IS NOT NULL,
+             refresh_token_hash = NULL,
+             updated_at = NOW()
+         FROM existing_users eu
+         WHERE u.id = eu.id
+         RETURNING u.password_hash IS NOT NULL AS has_password,
+                   u.is_active,
+                   eu.is_active AS was_active
+       )
+       SELECT has_password, is_active, was_active
+       FROM updated_users`,
+      [req.params.id]
+    )
+    const userRows = userResult.rows as Array<{
+      has_password: boolean
+      is_active: boolean
+      was_active: boolean
+    }>
+    loginAccessRestored = userRows.some((row) => row.has_password && row.is_active && !row.was_active)
+    activationRequired = userRows.some((row) => !row.has_password)
+
+    await insertEmployeeAuditLog({
+      action: 'employee_reactivated',
+      employeeId: req.params.id,
+      userId: req.user!.userId,
+      oldValues,
+      newValues: { employment_status: 'active', is_deleted: false },
+      req,
+    }, client)
+
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+
+  updated = await EmployeeModel.findById(req.params.id)
+  res.json({
+    success: true,
+    data: updated,
+    message: 'Employee reactivated.',
+    loginAccessRestored,
+    activationRequired,
+  })
+})
+
+export const separateEmployee = asyncHandler(async (req: Request, res: Response) => {
+  const body = (req.body ?? {}) as Record<string, unknown>
+  const status = normalizeSeparationStatus(body.status ?? body.employeeStatus, 'resigned')
+  const lastWorkingDay = requiredDate(body.lastWorkingDay, 'lastWorkingDay')
+  const separationDate = requiredDate(body.separationDate, 'separationDate')
+  const reason = requireSeparationText(body.reasonForLeaving ?? body.reason, 'reasonForLeaving')
+  const remarks = emptyToNull(body.remarks)
+
+  const client = await pool.connect()
+  let updated: EmployeeRow | undefined
+  let oldValues: Record<string, unknown> | undefined
+  try {
+    await client.query('BEGIN')
+
+    const existing = await client.query(
+      `SELECT *
+       FROM employees
+       WHERE id = $1
+       FOR UPDATE`,
+      [req.params.id]
+    )
+    const employee = existing.rows[0] as EmployeeRow | undefined
+    if (!employee) throw createError('Employee not found', 404)
+
+    oldValues = {
+      employment_status: employee.employment_status,
+      is_deleted: employee.is_deleted,
+      last_working_day: employee.last_working_day,
+      separation_date: employee.separation_date,
+      separation_reason: employee.separation_reason,
+      separation_remarks: employee.separation_remarks,
+    }
+
+    const result = await client.query(
+      `UPDATE employees
+       SET employment_status = $2,
+           last_working_day = $3,
+           separation_date = $4,
+           separation_reason = $5,
+           separation_remarks = $6,
+           separation_processed_by = $7,
+           separation_processed_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [req.params.id, status, lastWorkingDay, separationDate, reason, remarks, req.user!.userId]
+    )
+    updated = result.rows[0]
+
+    await client.query(
+      `UPDATE users
+       SET is_active = false,
+           refresh_token_hash = NULL,
+           activation_token_hash = NULL,
+           activation_token_expires_at = NULL,
+           password_reset_token_hash = NULL,
+           password_reset_token_expires_at = NULL,
+           updated_at = NOW()
+       WHERE employee_id = $1`,
+      [req.params.id]
+    )
+
+    await insertEmployeeAuditLog({
+      action: 'employee_separated',
+      employeeId: req.params.id,
+      userId: req.user!.userId,
+      oldValues,
+      newValues: {
+        employment_status: status,
+        last_working_day: lastWorkingDay,
+        separation_date: separationDate,
+        separation_reason: reason,
+        separation_remarks: remarks,
+      },
+      req,
+    }, client)
+
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+
+  updated = await EmployeeModel.findById(req.params.id)
+  res.json({
+    success: true,
+    data: updated,
+    message: 'Employee offboarding recorded. Login access has been disabled and payroll history remains available.',
+  })
+})
+
+export const permanentlyDeleteEmployee = asyncHandler(async (req: Request, res: Response) => {
   const employee = await EmployeeModel.findById(req.params.id)
   if (!employee) throw createError('Employee not found', 404)
 
-  const updated = await EmployeeModel.update(req.params.id, {
-    employment_status: 'active',
-  } as never)
-  res.json({ success: true, data: updated })
+  const counts = await employeeHistoryCounts(req.params.id)
+  if (hasProtectedHistory(counts)) {
+    const error = createError(
+      'Permanent deletion is blocked because this employee has payroll, attendance, leave, loan, or other employee history. Archive the employee instead.',
+      409
+    )
+    error.details = { historyCounts: counts }
+    throw error
+  }
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    await client.query('DELETE FROM users WHERE employee_id = $1', [req.params.id])
+    await client.query('DELETE FROM employees WHERE id = $1', [req.params.id])
+    await insertEmployeeAuditLog({
+      action: 'employee_permanently_deleted',
+      employeeId: req.params.id,
+      userId: req.user!.userId,
+      oldValues: employee as unknown as Record<string, unknown>,
+      newValues: {},
+      req,
+    }, client)
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+
+  res.json({ success: true, message: 'Employee permanently deleted.' })
 })

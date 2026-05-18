@@ -97,13 +97,14 @@ export const getAdminDashboard = asyncHandler(async (_req: Request, res: Respons
     pool.query(
       `SELECT
          COUNT(*) AS total_employees,
-         COUNT(*) FILTER (WHERE employment_status = 'active') AS active_employees,
-         COUNT(*) FILTER (WHERE employment_status <> 'active') AS inactive_employees
-       FROM employees`
+         COUNT(*) FILTER (WHERE employment_status = 'active' AND is_deleted = false) AS active_employees,
+         COUNT(*) FILTER (WHERE employment_status <> 'active' OR is_deleted = true) AS inactive_employees
+       FROM employees
+       WHERE is_deleted = false`
     ),
     pool.query(
       `WITH active_employees AS (
-         SELECT id FROM employees WHERE employment_status = 'active'
+         SELECT id FROM employees WHERE employment_status = 'active' AND is_deleted = false
        ),
        approved_leave_today AS (
          SELECT DISTINCT employee_id
@@ -128,7 +129,7 @@ export const getAdminDashboard = asyncHandler(async (_req: Request, res: Respons
     ),
     pool.query(
       `WITH active_employees AS (
-         SELECT id FROM employees WHERE employment_status = 'active'
+         SELECT id FROM employees WHERE employment_status = 'active' AND is_deleted = false
        ),
        workdays AS (
          SELECT day::date AS attendance_date
@@ -196,6 +197,7 @@ export const getAdminDashboard = asyncHandler(async (_req: Request, res: Respons
        LEFT JOIN attendance a ON a.employee_id = e.id AND a.date = $1::date
        LEFT JOIN approved_leave_today alt ON alt.employee_id = e.id
        WHERE e.employment_status = 'active'
+         AND e.is_deleted = false
          AND (
            a.status = 'absent'
            OR (a.time_in IS NOT NULL AND a.time_out IS NULL)

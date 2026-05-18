@@ -606,7 +606,7 @@ export async function reviewOffsetUsage(
 
 export async function getOffsetBalances(employeeId?: string) {
   const values: unknown[] = []
-  const where = employeeId ? 'WHERE e.id = $1' : `WHERE e.employment_status = 'active'`
+  const where = employeeId ? 'WHERE e.id = $1' : `WHERE e.employment_status = 'active' AND e.is_deleted = false`
   if (employeeId) values.push(employeeId)
 
   const result = await pool.query(

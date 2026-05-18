@@ -1,5 +1,5 @@
 import { api } from './api'
-import type { EmployeeFormData, PaginatedResponse, ApiResponse, ProfileUpdateRequest } from '../types'
+import type { EmployeeFormData, EmployeeSeparationPayload, PaginatedResponse, ApiResponse, ProfileUpdateRequest } from '../types'
 import { mapEmployee, mapProfileUpdateRequest } from './mappers'
 
 export interface EmployeeListParams {
@@ -9,6 +9,8 @@ export interface EmployeeListParams {
   departmentId?: string
   status?: string
   employmentType?: string
+  includeArchived?: boolean
+  includeFormer?: boolean
 }
 
 export type ProfileUpdateRequestPayload = Record<string, string | null | undefined> & {
@@ -48,6 +50,14 @@ export const employeeService = {
     api.delete<ApiResponse<Record<string, unknown>>>(`/employees/${id}`)
       .then((res) => ({ ...res, data: mapEmployee(res.data) })),
 
+  separate: (id: string, data: EmployeeSeparationPayload) =>
+    api.put<ApiResponse<Record<string, unknown>>>(`/employees/${id}/separation`, data)
+      .then((res) => ({ ...res, data: mapEmployee(res.data) })),
+
+  archive: (id: string) =>
+    api.delete<ApiResponse<Record<string, unknown>>>(`/employees/${id}`)
+      .then((res) => ({ ...res, data: mapEmployee(res.data) })),
+
   activate: (id: string) =>
     api.put<ApiResponse<Record<string, unknown>>>(`/employees/${id}/activate`)
       .then((res) => ({ ...res, data: mapEmployee(res.data) })),
@@ -56,8 +66,5 @@ export const employeeService = {
     api.post<ApiResponse<void>>(`/employees/${id}/resend-activation`),
 
   delete: (id: string) =>
-    api.delete<ApiResponse<void>>(`/employees/${id}`),
-
-  exportCsv: () =>
-    api.raw('/employees/export/csv'),
+    api.delete<ApiResponse<void>>(`/employees/${id}/permanent`),
 }

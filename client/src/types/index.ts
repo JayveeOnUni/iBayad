@@ -68,7 +68,7 @@ export interface Position {
 
 // ─── Employee ─────────────────────────────────────────────────────────────────
 
-export type EmploymentStatus = 'active' | 'inactive' | 'resigned' | 'terminated' | 'on_leave'
+export type EmploymentStatus = 'active' | 'inactive' | 'resigned' | 'terminated' | 'end_of_contract'
 export type CivilStatus = 'single' | 'married' | 'widowed' | 'separated'
 export type EmploymentType = 'regular' | 'probationary' | 'contractual' | 'part_time'
 
@@ -98,6 +98,15 @@ export interface Employee {
   hireDate: string
   regularizationDate?: string
   resignationDate?: string
+  lastWorkingDay?: string
+  separationDate?: string
+  separationReason?: string
+  separationRemarks?: string
+  separationProcessedBy?: string
+  separationProcessedAt?: string
+  isDeleted: boolean
+  deletedAt?: string
+  deletedBy?: string
 
   // Government IDs
   sssNumber?: string
@@ -944,6 +953,8 @@ export interface ApiResponse<T> {
   message?: string
   activationLink?: string
   activationEmailSent?: boolean
+  loginAccessRestored?: boolean
+  activationRequired?: boolean
 }
 
 export interface PaginatedResponse<T> {
@@ -1006,6 +1017,14 @@ export interface EmployeeFormData {
   bankName?: string
   bankAccountNumber?: string
   shiftId?: string
+}
+
+export interface EmployeeSeparationPayload {
+  status: Exclude<EmploymentStatus, 'active'>
+  lastWorkingDay: string
+  separationDate: string
+  reasonForLeaving: string
+  remarks?: string
 }
 
 export interface LeaveApplicationFormData {

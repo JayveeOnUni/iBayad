@@ -24,8 +24,8 @@ export const authService = {
     api.post<ApiResponse<void>>('/auth/activate', { token, password }),
 
   forgotPassword: (email: string) =>
-    api.post<void>('/auth/forgot-password', { email }),
+    api.post<ApiResponse<void> & { resetLink?: string }>('/auth/forgot-password', { email }),
 
   resetPassword: (token: string, password: string) =>
-    api.post<void>('/auth/reset-password', { token, password }),
+    api.post<ApiResponse<void>>('/auth/reset-password', { token, password }),
 }
