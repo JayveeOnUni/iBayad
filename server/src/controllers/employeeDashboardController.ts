@@ -1,6 +1,7 @@
 import { Request, Response } from 'express'
 import pool from '../utils/db'
 import { asyncHandler, createError } from '../middleware/errorHandler'
+import { LeaveBalanceService, LeaveBalanceSummary } from '../services/leaveBalanceService'
 
 function localDateString(date: Date): string {
   const year = date.getFullYear()
@@ -55,27 +56,32 @@ interface MonthlyAttendanceRow extends Record<string, unknown> {
   worked_minutes: number | string
 }
 
-interface LeaveBalanceRow extends Record<string, unknown> {
-  id: string
-  name: string
-  code: string
-  is_paid: boolean
-  allowance: number | string
-  taken: number | string
-  pending: number | string
-  balance: number | string
-}
-
 interface LeaveBalanceItem {
   id: string
+  employeeId: string
+  leaveTypeId: string
   name: string
   code: string
+  leaveType: string
   isPaid: boolean
+  allocated: number
+  openingBalance: number
+  earnedCredits: number
+  pendingCredits: number
+  carriedOverCredits: number
+  forfeitedCredits: number
+  convertedToCashCredits: number
+  used: number
+  remaining: number
+  year: number
+  entitlementStage: string
   allowance: number
   taken: number
   pending: number
   balance: number
 }
+
+const DASHBOARD_SUMMARY_LEAVE_CODES = new Set(['VACATION', 'SICK'])
 
 interface AnnouncementRow extends Record<string, unknown> {
   id: string
@@ -85,6 +91,72 @@ interface AnnouncementRow extends Record<string, unknown> {
   end_date: Date | string | null
   is_pinned: boolean
   created_at: Date | string
+}
+
+function numberValue(value: unknown): number {
+  const parsed = Number(value ?? 0)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function leaveAllowance(balance: LeaveBalanceSummary): number {
+  const accruedAllowance = numberValue(balance.opening_balance) +
+    numberValue(balance.earned_credits) +
+    numberValue(balance.carried_over_credits)
+  if (accruedAllowance > 0) return accruedAllowance
+
+  return numberValue(balance.available_balance) +
+    numberValue(balance.used_credits) +
+    numberValue(balance.pending_credits) +
+    numberValue(balance.forfeited_credits) +
+    numberValue(balance.converted_to_cash_credits)
+}
+
+export function calculateMonthToDateExpectedHours(now: Date, scheduledHours: number, workDaysPerMonth: number): number {
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+  const elapsedDays = Math.min(Math.max(now.getDate(), 1), daysInMonth)
+  return scheduledHours * workDaysPerMonth * (elapsedDays / daysInMonth)
+}
+
+export function mapLeaveBalancesToDashboardItems(balances: LeaveBalanceSummary[]): LeaveBalanceItem[] {
+  return balances.map((balance) => {
+    const allowance = leaveAllowance(balance)
+    const used = numberValue(balance.used_credits)
+    const pending = numberValue(balance.pending_credits)
+    const remaining = numberValue(balance.available_balance)
+
+    return {
+      id: balance.leave_type_id,
+      employeeId: balance.employee_id,
+      leaveTypeId: balance.leave_type_id,
+      name: balance.name,
+      code: balance.code,
+      leaveType: balance.name.toLowerCase().replace(' leave', '').replace(/\s+/g, '_'),
+      isPaid: Boolean(balance.is_paid),
+      allocated: numberValue(balance.earned_credits),
+      openingBalance: numberValue(balance.opening_balance),
+      earnedCredits: numberValue(balance.earned_credits),
+      pendingCredits: pending,
+      carriedOverCredits: numberValue(balance.carried_over_credits),
+      forfeitedCredits: numberValue(balance.forfeited_credits),
+      convertedToCashCredits: numberValue(balance.converted_to_cash_credits),
+      used,
+      remaining,
+      year: Number(balance.year),
+      entitlementStage: balance.entitlement_stage,
+      allowance,
+      taken: used,
+      pending,
+      balance: remaining,
+    }
+  })
+}
+
+function findLeaveBalance(items: LeaveBalanceItem[], codes: string[]): number {
+  return items.find((item) => codes.includes(item.code))?.balance ?? 0
+}
+
+function isDashboardSummaryLeaveItem(item: LeaveBalanceItem): boolean {
+  return DASHBOARD_SUMMARY_LEAVE_CODES.has(item.code)
 }
 
 export const getEmployeeDashboard = asyncHandler(async (req: Request, res: Response) => {
@@ -115,7 +187,7 @@ export const getEmployeeDashboard = asyncHandler(async (req: Request, res: Respo
   const employee = employeeResult.rows[0]
   if (!employee) throw createError('Employee profile not found', 404)
 
-  const [todayResult, monthlyResult, leaveResult, announcementsResult] = await Promise.all([
+  const [todayResult, monthlyResult, leaveBalances, announcementsResult] = await Promise.all([
     pool.query<AttendanceTodayRow>(
       `SELECT id, date, time_in, time_out, status, late_minutes,
               offset_earned_minutes, offset_used_minutes, excess_minutes,
@@ -143,20 +215,7 @@ export const getEmployeeDashboard = asyncHandler(async (req: Request, res: Respo
          AND EXTRACT(MONTH FROM date) = $3`,
       [employeeId, year, month]
     ),
-    pool.query<LeaveBalanceRow>(
-      `SELECT lt.id, lt.name, lt.code, lt.is_paid, lt.days_per_year AS allowance,
-              COALESCE(SUM(CASE WHEN lr.status = 'approved' THEN lr.total_days ELSE 0 END), 0) AS taken,
-              COALESCE(SUM(CASE WHEN lr.status = 'pending' THEN lr.total_days ELSE 0 END), 0) AS pending,
-              lt.days_per_year - COALESCE(SUM(CASE WHEN lr.status = 'approved' THEN lr.total_days ELSE 0 END), 0) AS balance
-       FROM leave_types lt
-       LEFT JOIN leave_requests lr ON lr.leave_type_id = lt.id
-         AND lr.employee_id = $1
-         AND EXTRACT(YEAR FROM lr.start_date) = $2
-       WHERE lt.is_active = true
-       GROUP BY lt.id, lt.name, lt.code, lt.is_paid, lt.days_per_year
-       ORDER BY lt.name`,
-      [employeeId, year]
-    ),
+    LeaveBalanceService.getBalances(employeeId, year, now),
     pool.query<AnnouncementRow>(
       `SELECT id, title, content AS message, start_date, end_date, is_pinned, created_at
        FROM announcements
@@ -177,21 +236,17 @@ export const getEmployeeDashboard = asyncHandler(async (req: Request, res: Respo
   const totalHours = Number(monthly.worked_minutes ?? 0) / 60
   const offsetUsedHours = Number(monthly.offset_used_minutes ?? 0) / 60
   const effectiveHours = totalHours + offsetUsedHours
-  const expectedHours = Number(employee.scheduled_hours ?? 8) * Number(employee.work_days_per_month ?? 22)
-  const leaveItems: LeaveBalanceItem[] = leaveResult.rows.map((row: LeaveBalanceRow): LeaveBalanceItem => ({
-    id: row.id,
-    name: row.name,
-    code: row.code,
-    isPaid: Boolean(row.is_paid),
-    allowance: Number(row.allowance ?? 0),
-    taken: Number(row.taken ?? 0),
-    pending: Number(row.pending ?? 0),
-    balance: Number(row.balance ?? 0),
-  }))
+  const expectedHours = calculateMonthToDateExpectedHours(
+    now,
+    Number(employee.scheduled_hours ?? 8),
+    Number(employee.work_days_per_month ?? 22)
+  )
+  const leaveItems = mapLeaveBalancesToDashboardItems(leaveBalances)
+  const summaryLeaveItems = leaveItems.filter(isDashboardSummaryLeaveItem)
 
-  const vacationLeave = leaveItems.find((item) => item.code === 'VL')?.balance ?? 0
-  const sickLeave = leaveItems.find((item) => item.code === 'SL')?.balance ?? 0
-  const emergencyLeave = leaveItems.find((item) => item.code === 'EL')?.balance ?? 0
+  const vacationLeave = findLeaveBalance(leaveItems, ['VACATION', 'VL'])
+  const sickLeave = findLeaveBalance(leaveItems, ['SICK', 'SL'])
+  const emergencyLeave = findLeaveBalance(leaveItems, ['EMERGENCY', 'EL'])
 
   res.json({
     success: true,
@@ -242,10 +297,10 @@ export const getEmployeeDashboard = asyncHandler(async (req: Request, res: Respo
         vacationLeave,
         sickLeave,
         emergencyLeave,
-        totalAllowance: round(leaveItems.reduce((sum: number, item: LeaveBalanceItem): number => sum + item.allowance, 0), 1),
-        totalTaken: round(leaveItems.reduce((sum: number, item: LeaveBalanceItem): number => sum + item.taken, 0), 1),
-        totalAvailable: round(leaveItems.reduce((sum: number, item: LeaveBalanceItem): number => sum + item.balance, 0), 1),
-        pendingRequests: round(leaveItems.reduce((sum: number, item: LeaveBalanceItem): number => sum + item.pending, 0), 1),
+        totalAllowance: round(summaryLeaveItems.reduce((sum: number, item: LeaveBalanceItem): number => sum + item.allowance, 0), 1),
+        totalTaken: round(summaryLeaveItems.reduce((sum: number, item: LeaveBalanceItem): number => sum + item.taken, 0), 1),
+        totalAvailable: round(summaryLeaveItems.reduce((sum: number, item: LeaveBalanceItem): number => sum + item.balance, 0), 1),
+        pendingRequests: round(summaryLeaveItems.reduce((sum: number, item: LeaveBalanceItem): number => sum + item.pending, 0), 1),
         items: leaveItems,
       },
       announcements: announcementsResult.rows.map((row: AnnouncementRow) => ({

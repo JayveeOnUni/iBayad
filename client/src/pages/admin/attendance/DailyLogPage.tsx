@@ -30,6 +30,7 @@ const statusVariant: Record<AttendanceFilterStatus, 'success' | 'warning' | 'dan
   half_day: 'warning',
   on_leave: 'info',
   holiday: 'info',
+  rest_day: 'neutral',
   missing: 'danger',
 }
 
@@ -40,6 +41,7 @@ const statusLabels: Record<AttendanceFilterStatus, string> = {
   half_day: 'Half Day',
   on_leave: 'On Leave',
   holiday: 'Holiday',
+  rest_day: 'Rest Day',
   missing: 'Unrecorded',
 }
 

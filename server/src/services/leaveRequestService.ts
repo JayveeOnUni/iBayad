@@ -1,10 +1,13 @@
 import { format } from 'date-fns'
+import type { Pool, PoolClient } from 'pg'
 import pool from '../utils/db'
 import { LeaveAttendanceService } from './leaveAttendanceService'
 import { LeaveAuditService } from './leaveAuditService'
 import { LeaveBalanceService } from './leaveBalanceService'
 import { LeavePayrollImpactService } from './leavePayrollImpactService'
 import { LeaveCode, LeavePolicyService, LeaveRequestInput } from './leavePolicyService'
+
+type Queryable = Pool | PoolClient
 
 export class LeaveRequestService {
   static async list(params: {
@@ -59,7 +62,8 @@ export class LeaveRequestService {
               lt.name AS leave_type_name, lt.code AS leave_type_code,
               COALESCE(json_agg(DISTINCT jsonb_build_object(
                 'id', ld.id, 'document_type', ld.document_type, 'file_name', ld.file_name,
-                'file_url', ld.file_url, 'status', ld.status
+                'file_url', ld.file_url,
+                'status', CASE WHEN ld.file_url LIKE 'metadata://%' THEN 'declared' ELSE ld.status::text END
               )) FILTER (WHERE ld.id IS NOT NULL), '[]') AS documents
        FROM leave_requests lr
        JOIN employees e ON e.id = lr.employee_id
@@ -79,7 +83,8 @@ export class LeaveRequestService {
               lt.name AS leave_type_name, lt.code AS leave_type_code,
               COALESCE(json_agg(DISTINCT jsonb_build_object(
                 'id', ld.id, 'document_type', ld.document_type, 'file_name', ld.file_name,
-                'file_url', ld.file_url, 'status', ld.status
+                'file_url', ld.file_url,
+                'status', CASE WHEN ld.file_url LIKE 'metadata://%' THEN 'declared' ELSE ld.status::text END
               )) FILTER (WHERE ld.id IS NOT NULL), '[]') AS documents
        FROM leave_requests lr
        JOIN employees e ON e.id = lr.employee_id
@@ -171,23 +176,43 @@ export class LeaveRequestService {
   }
 
   static async approve(id: string, actor: { userId?: string; employeeId?: string; role?: string }, remarks?: string): Promise<Record<string, unknown>> {
-    const existing = await this.getRawRequest(id)
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      const approved = await this.approveInTransaction(id, actor, remarks, client)
+      await client.query('COMMIT')
+      return approved
+    } catch (error) {
+      await client.query('ROLLBACK')
+      throw error
+    } finally {
+      client.release()
+    }
+  }
+
+  private static async approveInTransaction(
+    id: string,
+    actor: { userId?: string; employeeId?: string; role?: string },
+    remarks: string | undefined,
+    db: PoolClient
+  ): Promise<Record<string, unknown>> {
+    const existing = await this.getRawRequest(id, db, true)
     if (!existing) throw new Error('Request not found')
     if (existing.status !== 'pending') throw new Error('Request not found or already reviewed')
 
-    await this.validateApprovalDocuments(existing)
+    await this.validateApprovalDocuments(existing, db)
 
     const year = new Date(existing.start_date).getFullYear()
     const split = await this.computeDeductionSplit(existing.employee_id, {
       code: existing.leave_type_code,
       is_paid: existing.leave_type_is_paid,
       requires_balance: existing.leave_type_requires_balance,
-    }, Number(existing.total_days), year)
+    }, Number(existing.total_days), year, { excludeLeaveRequestId: id, db })
     if (existing.leave_type_requires_balance && existing.leave_type_is_paid && split.unpaidDays > 0) {
       throw new Error(`Insufficient ${existing.leave_type_name.toLowerCase()} credits.`)
     }
 
-    const update = await pool.query(
+    const update = await db.query(
       `UPDATE leave_requests
        SET status = 'approved',
            reviewed_by = $2,
@@ -213,7 +238,7 @@ export class LeaveRequestService {
         split.deductedOtherDays,
       ]
     )
-    const approved = update.rows[0] as Record<string, unknown>
+    let approved = update.rows[0] as Record<string, unknown>
 
     await LeaveAttendanceService.applyApprovedLeave({
       employeeId: existing.employee_id,
@@ -223,15 +248,22 @@ export class LeaveRequestService {
       unpaidDays: split.unpaidDays,
       leaveName: existing.leave_type_name,
       userId: actor.userId,
-    })
+    }, db)
     await LeavePayrollImpactService.createForApprovedLeave({
       employeeId: existing.employee_id,
       leaveRequestId: id,
       unpaidDays: split.unpaidDays,
       paidDays: Number(existing.total_days) - split.unpaidDays,
       leaveCode: existing.leave_type_code,
-    })
-    await pool.query(`UPDATE leave_requests SET attendance_impact_status = 'applied', updated_at = NOW() WHERE id = $1`, [id])
+    }, db)
+    const finalStatus = await db.query(
+      `UPDATE leave_requests
+       SET attendance_impact_status = 'applied', updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [id]
+    )
+    approved = finalStatus.rows[0] as Record<string, unknown>
 
     await LeaveAuditService.record({
       leaveRequestId: id,
@@ -242,7 +274,15 @@ export class LeaveRequestService {
       userId: actor.userId,
       employeeId: actor.employeeId,
       role: actor.role,
-    })
+    }, db)
+    await LeaveAuditService.recordEntityAudit({
+      userId: actor.userId,
+      action: 'leave_request_approved',
+      entity: 'leave_requests',
+      entityId: id,
+      oldValues: existing,
+      newValues: approved,
+    }, db)
 
     return approved
   }
@@ -363,7 +403,7 @@ export class LeaveRequestService {
     code: LeaveCode
     is_paid: boolean
     requires_balance: boolean
-  }, totalDays: number, year: number): Promise<{
+  }, totalDays: number, year: number, options: { excludeLeaveRequestId?: string; db?: Queryable } = {}): Promise<{
     deductedSickDays: number
     deductedVacationDays: number
     deductedOtherDays: number
@@ -378,22 +418,22 @@ export class LeaveRequestService {
     if (!leaveType.requires_balance && code !== 'EMERGENCY') return emptyPaid
 
     if (code === 'VACATION') {
-      const available = await LeaveBalanceService.getAvailable(employeeId, 'VACATION', year)
+      const available = await LeaveBalanceService.getAvailable(employeeId, 'VACATION', year, new Date(), options)
       return { deductedSickDays: 0, deductedVacationDays: Math.min(totalDays, available), deductedOtherDays: 0, unpaidDays: Math.max(0, totalDays - available) }
     }
     if (code === 'SICK') {
-      const available = await LeaveBalanceService.getAvailable(employeeId, 'SICK', year)
+      const available = await LeaveBalanceService.getAvailable(employeeId, 'SICK', year, new Date(), options)
       return { deductedSickDays: Math.min(totalDays, available), deductedVacationDays: 0, deductedOtherDays: 0, unpaidDays: Math.max(0, totalDays - available) }
     }
     if (code === 'EMERGENCY') {
-      const employee = await LeavePolicyService.getEmployee(employeeId)
+      const employee = await LeavePolicyService.getEmployee(employeeId, options.db)
       if (!employee || LeavePolicyService.isProbationary(employee)) {
         return unpaid
       }
-      const sick = await LeaveBalanceService.getAvailable(employeeId, 'SICK', year)
+      const sick = await LeaveBalanceService.getAvailable(employeeId, 'SICK', year, new Date(), options)
       const deductedSickDays = Math.min(totalDays, sick)
       const remainingAfterSick = totalDays - deductedSickDays
-      const vacation = await LeaveBalanceService.getAvailable(employeeId, 'VACATION', year)
+      const vacation = await LeaveBalanceService.getAvailable(employeeId, 'VACATION', year, new Date(), options)
       const deductedVacationDays = Math.min(remainingAfterSick, vacation)
       return {
         deductedSickDays,
@@ -403,7 +443,7 @@ export class LeaveRequestService {
       }
     }
     if (leaveType.requires_balance) {
-      const available = await LeaveBalanceService.getAvailable(employeeId, code, year)
+      const available = await LeaveBalanceService.getAvailable(employeeId, code, year, new Date(), options)
       const deductedOtherDays = Math.min(totalDays, available)
       return { deductedSickDays: 0, deductedVacationDays: 0, deductedOtherDays, unpaidDays: Math.max(0, totalDays - available) }
     }
@@ -416,7 +456,7 @@ export class LeaveRequestService {
     return ['immediate_supervisor', 'hr_admin']
   }
 
-  private static async getRawRequest(id: string): Promise<{
+  private static async getRawRequest(id: string, db: Queryable = pool, forUpdate = false): Promise<{
     id: string
     employee_id: string
     start_date: Date
@@ -430,13 +470,14 @@ export class LeaveRequestService {
     leave_type_code: LeaveCode
     leave_type_name: string
   } | undefined> {
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT lr.*, lt.code AS leave_type_code, lt.name AS leave_type_name,
               COALESCE(lt.is_paid, true) AS leave_type_is_paid,
               COALESCE(lt.requires_balance, false) AS leave_type_requires_balance
        FROM leave_requests lr
        JOIN leave_types lt ON lt.id = lr.leave_type_id
-       WHERE lr.id = $1`,
+       WHERE lr.id = $1
+       ${forUpdate ? 'FOR UPDATE OF lr' : ''}`,
       [id]
     )
     return result.rows[0]
@@ -447,10 +488,14 @@ export class LeaveRequestService {
     total_days: string
     is_contagious: boolean
     leave_type_code: LeaveCode
-  }): Promise<void> {
+  }, db: Queryable = pool): Promise<void> {
     if (request.leave_type_code !== 'SICK') return
-    const docs = await pool.query(
-      `SELECT document_type FROM leave_documents WHERE leave_request_id = $1 AND status IN ('pending', 'verified')`,
+    const docs = await db.query(
+      `SELECT document_type
+       FROM leave_documents
+       WHERE leave_request_id = $1
+         AND status IN ('pending', 'verified')
+         AND file_url NOT LIKE 'metadata://%'`,
       [request.id]
     )
     const documentTypes = new Set(docs.rows.map((row: { document_type: string }) => row.document_type))
@@ -465,13 +510,23 @@ export class LeaveRequestService {
   private static async createDocumentPlaceholders(leaveRequestId: string, documentTypes?: string[], uploadedBy?: string): Promise<void> {
     if (!documentTypes?.length) return
     for (const documentType of documentTypes) {
-      await this.attachDocument({
+      await pool.query(
+        `INSERT INTO leave_documents (leave_request_id, document_type, file_name, file_url, mime_type, uploaded_by)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          leaveRequestId,
+          documentType,
+          `${documentType.toLowerCase()}-declared-${format(new Date(), 'yyyyMMddHHmmss')}.txt`,
+          `metadata://${documentType.toLowerCase()}`,
+          'text/plain',
+          uploadedBy ?? null,
+        ]
+      )
+      await LeaveAuditService.record({
         leaveRequestId,
-        documentType,
-        fileName: `${documentType.toLowerCase()}-${format(new Date(), 'yyyyMMddHHmmss')}.txt`,
-        fileUrl: `metadata://${documentType.toLowerCase()}`,
-        mimeType: 'text/plain',
-        uploadedBy,
+        action: 'document_declared',
+        newStatus: null,
+        userId: uploadedBy,
       })
     }
   }

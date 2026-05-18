@@ -71,7 +71,7 @@ function minutesToHours(minutes: number): number {
   return Math.round((minutes / 60) * 100) / 100
 }
 
-function isProtectedStatus(status?: string | null): boolean {
+export function isProtectedAttendanceStatus(status?: string | null): boolean {
   return Boolean(status && ['absent', 'holiday', 'rest_day', 'on_leave'].includes(status))
 }
 
@@ -152,7 +152,7 @@ export function calculateAttendanceMetrics(input: AttendanceMetricsInput): Atten
   const excessMinutes = timeOut ? Math.max(0, actualRenderedMinutes - requiredWorkMinutes) : 0
 
   let status = input.currentStatus ?? 'present'
-  if (!isProtectedStatus(status) || timeIn || timeOut) {
+  if (!isProtectedAttendanceStatus(status) || timeIn || timeOut) {
     if (timeOut && effectiveRenderedMinutes < requiredWorkMinutes / 2) {
       status = 'half_day'
     } else if (lateMinutes > 0) {

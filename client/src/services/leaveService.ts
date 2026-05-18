@@ -1,5 +1,5 @@
 import { api } from './api'
-import type { LeaveApplication, LeaveBalance, LeaveApplicationFormData, ApiResponse, LeaveTypeConfig } from '../types'
+import type { LeaveBalance, LeaveApplicationFormData, ApiResponse, LeaveTypeConfig } from '../types'
 import { mapLeave } from './mappers'
 
 function mapLeaveBalance(row: Record<string, unknown>): LeaveBalance {
@@ -79,6 +79,13 @@ export interface LeaveRequestPayload {
   documentTypes?: string[]
 }
 
+export interface LeaveDocumentUploadPayload {
+  documentType: string
+  fileName: string
+  fileUrl: string
+  mimeType?: string
+}
+
 export const leaveService = {
   // Applications
   list: (params?: LeaveListParams) =>
@@ -93,7 +100,8 @@ export const leaveService = {
       })),
 
   getById: (id: string) =>
-    api.get<ApiResponse<LeaveApplication>>(`/leave/${id}`),
+    api.get<ApiResponse<Record<string, unknown>>>(`/leave/requests/${id}`)
+      .then((res) => ({ ...res, data: mapLeave(res.data) })),
 
   apply: (data: LeaveApplicationFormData | LeaveRequestPayload) =>
     api.post<ApiResponse<Record<string, unknown>>>('/leave/requests', data)
@@ -105,6 +113,9 @@ export const leaveService = {
   cancel: (id: string) =>
     api.put<ApiResponse<Record<string, unknown>>>(`/leave/requests/${id}/cancel`)
       .then((res) => ({ ...res, data: mapLeave(res.data) })),
+
+  uploadDocument: (id: string, data: LeaveDocumentUploadPayload) =>
+    api.post<ApiResponse<Record<string, unknown>>>(`/leave/requests/${id}/documents`, data),
 
   approve: (id: string, remarks?: string) =>
     api.put<ApiResponse<Record<string, unknown>>>(`/leave/requests/${id}/review`, { action: 'approve', remarks })

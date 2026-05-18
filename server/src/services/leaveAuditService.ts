@@ -1,4 +1,7 @@
 import pool from '../utils/db'
+import type { Pool, PoolClient } from 'pg'
+
+type Queryable = Pool | PoolClient
 
 export class LeaveAuditService {
   static async record(params: {
@@ -10,8 +13,8 @@ export class LeaveAuditService {
     userId?: string
     employeeId?: string
     role?: string
-  }): Promise<void> {
-    await pool.query(
+  }, db: Queryable = pool): Promise<void> {
+    await db.query(
       `INSERT INTO leave_approval_history (
          leave_request_id, action_by_employee_id, action_by_user_id, action_role,
          previous_status, new_status, action, remarks
@@ -36,8 +39,8 @@ export class LeaveAuditService {
     entityId: string
     oldValues?: unknown
     newValues?: unknown
-  }): Promise<void> {
-    await pool.query(
+  }, db: Queryable = pool): Promise<void> {
+    await db.query(
       `INSERT INTO audit_logs (user_id, action, entity, entity_id, old_values, new_values)
        VALUES ($1, $2, $3, $4, $5, $6)`,
       [

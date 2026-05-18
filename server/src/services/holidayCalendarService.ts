@@ -1,5 +1,8 @@
 import { addDays, format, isWeekend } from 'date-fns'
+import type { Pool, PoolClient } from 'pg'
 import pool from '../utils/db'
+
+type Queryable = Pool | PoolClient
 
 export class HolidayCalendarService {
   static async getNonWorkingHolidayDates(params: {
@@ -7,8 +10,8 @@ export class HolidayCalendarService {
     endDate: Date
     country?: string
     cityOrProvince?: string
-  }): Promise<Set<string>> {
-    const result = await pool.query(
+  }, db: Queryable = pool): Promise<Set<string>> {
+    const result = await db.query(
       `SELECT COALESCE(holiday_date, date) AS holiday_date
        FROM holidays
        WHERE COALESCE(holiday_date, date) BETWEEN $1 AND $2
@@ -31,8 +34,8 @@ export class HolidayCalendarService {
     endDate: Date
     country?: string
     cityOrProvince?: string
-  }): Promise<number> {
-    const holidayDates = await this.getNonWorkingHolidayDates(params)
+  }, db: Queryable = pool): Promise<number> {
+    const holidayDates = await this.getNonWorkingHolidayDates(params, db)
     let count = 0
     let current = new Date(params.startDate)
 

@@ -1,4 +1,7 @@
 import pool from '../utils/db'
+import type { Pool, PoolClient } from 'pg'
+
+type Queryable = Pool | PoolClient
 
 function toNumber(value: unknown): number {
   const numberValue = Number(value ?? 0)
@@ -12,8 +15,8 @@ export class LeavePayrollImpactService {
     unpaidDays: number
     paidDays: number
     leaveCode: string
-  }): Promise<void> {
-    const employee = await pool.query(
+  }, db: Queryable = pool): Promise<void> {
+    const employee = await db.query(
       `SELECT basic_salary, daily_rate, work_days_per_month
        FROM employees
        WHERE id = $1`,
@@ -25,7 +28,7 @@ export class LeavePayrollImpactService {
     const dailyRate = toNumber(employeeRow.daily_rate) || toNumber(employeeRow.basic_salary) / (toNumber(employeeRow.work_days_per_month) || 22)
 
     if (params.unpaidDays > 0) {
-      await pool.query(
+      await db.query(
         `INSERT INTO payroll_leave_adjustments (
            employee_id, leave_request_id, adjustment_type, days, amount, description, status
          ) VALUES ($1, $2, 'UNPAID_LEAVE_DEDUCTION', $3, $4, $5, 'pending')`,
@@ -40,7 +43,7 @@ export class LeavePayrollImpactService {
     }
 
     if (params.leaveCode === 'MATERNITY') {
-      await pool.query(
+      await db.query(
         `INSERT INTO payroll_leave_adjustments (
            employee_id, leave_request_id, adjustment_type, days, amount, description, status
          ) VALUES ($1, $2, 'MATERNITY_ALLOWANCE', $3, $4, 'SSS-reimbursable maternity allowance advanced by company', 'pending')`,
@@ -49,7 +52,7 @@ export class LeavePayrollImpactService {
     }
 
     if (params.leaveCode === 'PATERNITY') {
-      await pool.query(
+      await db.query(
         `INSERT INTO payroll_leave_adjustments (
            employee_id, leave_request_id, adjustment_type, days, amount, description, status
          ) VALUES ($1, $2, 'PATERNITY_PAID_LEAVE', $3, $4, 'Paid statutory paternity leave', 'pending')`,
@@ -57,7 +60,7 @@ export class LeavePayrollImpactService {
       )
     }
 
-    await pool.query(
+    await db.query(
       `UPDATE leave_requests
        SET payroll_impact_status = $2, updated_at = NOW()
        WHERE id = $1`,

@@ -1,9 +1,10 @@
 import { AlertCircle, CalendarClock, LogIn, LogOut, Megaphone } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { attendanceService } from '../../services/attendanceService'
 import { dashboardService } from '../../services/dashboardService'
 import type { EmployeeDashboardData } from '../../types'
-import Card, { CardHeader, StatCard } from '../../components/ui/Card'
+import Card, { CardHeader } from '../../components/ui/Card'
 import Table from '../../components/ui/Table'
 import { EmptyState, FeedbackMessage, Page, PageHeader } from '../../components/ui/Page'
 
@@ -48,6 +49,18 @@ function formatTimeOnly(value?: string | null) {
 function hours(value: number) {
   return `${Number(value || 0).toFixed(value % 1 === 0 ? 0 : 1)} hr`
 }
+
+function balanceNumber(value: number | undefined) {
+  return Number(value ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })
+}
+
+const protectedAttendanceStatuses = new Set(['on_leave', 'holiday', 'rest_day', 'absent'])
+const leaveTypePriority = new Map([
+  ['VACATION', 1],
+  ['SICK', 2],
+  ['EMERGENCY', 3],
+])
+const coreLeaveTypeCodes = new Set(leaveTypePriority.keys())
 
 export default function EmployeeDashboardPage() {
   const [dashboard, setDashboard] = useState<EmployeeDashboardData | null>(null)
@@ -100,24 +113,34 @@ export default function EmployeeDashboardPage() {
   const attendance = dashboard?.attendanceToday
   const monthly = dashboard?.monthlyAttendance
   const leave = dashboard?.leaveBalance
-  const canTimeIn = attendance?.status === 'Not Timed In'
-  const canTimeOut = attendance?.status === 'Timed In'
+  const isProtectedAttendance = protectedAttendanceStatuses.has(attendance?.attendanceStatus ?? '')
+  const canTimeIn = attendance?.status === 'Not Timed In' && !isProtectedAttendance
+  const canTimeOut = attendance?.status === 'Timed In' && !isProtectedAttendance
   const isTimeInDisabled = !canTimeIn || Boolean(punchAction)
   const isTimeOutDisabled = !canTimeOut || Boolean(punchAction)
   const workedPercent = monthly && monthly.expectedHours > 0 ? (monthly.totalHours / monthly.expectedHours) * 100 : 0
   const shortagePercent = monthly && monthly.expectedHours > 0 ? (monthly.shortageHours / monthly.expectedHours) * 100 : 0
   const offsetPercent = monthly && monthly.expectedHours > 0 ? (monthly.offsetEarnedHours / monthly.expectedHours) * 100 : 0
 
-  const leaveStats = useMemo(() => {
-    if (!leave) return []
-    const totalLeaveAllowance = 15
+  const { coreLeaveBalanceItems, otherLeaveBalanceItems } = useMemo(() => {
+    if (!leave?.items) {
+      return {
+        coreLeaveBalanceItems: [],
+        otherLeaveBalanceItems: [],
+      }
+    }
 
-    return [
-      { label: 'Leave allowance', value: totalLeaveAllowance, tone: 'brand' as const },
-      { label: 'Leave taken', value: leave.totalTaken, tone: 'neutral' as const },
-      { label: 'Leave available', value: Math.max(0, totalLeaveAllowance - leave.totalTaken), tone: 'success' as const },
-      { label: 'Pending requests', value: leave.pendingRequests, tone: 'warning' as const },
-    ]
+    const sortedItems = [...leave.items].sort((a, b) => {
+      const priorityA = leaveTypePriority.get(a.code) ?? 99
+      const priorityB = leaveTypePriority.get(b.code) ?? 99
+      if (priorityA !== priorityB) return priorityA - priorityB
+      return a.name.localeCompare(b.name)
+    })
+
+    return {
+      coreLeaveBalanceItems: sortedItems.filter((item) => coreLeaveTypeCodes.has(item.code)),
+      otherLeaveBalanceItems: sortedItems.filter((item) => !coreLeaveTypeCodes.has(item.code)),
+    }
   }, [leave])
 
   if (isLoading) {
@@ -170,6 +193,7 @@ export default function EmployeeDashboardPage() {
                 disabled={isTimeInDisabled}
                 aria-busy={punchAction === 'in'}
                 aria-label="Time In"
+                title={isProtectedAttendance ? 'Time in is unavailable for today\'s attendance status.' : undefined}
                 onClick={() => punch('in')}
                 className="group flex min-w-[180px] items-center gap-3 rounded-lg border border-border bg-success-muted px-3 py-2 text-left transition-colors hover:border-success focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-success focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-border"
               >
@@ -186,6 +210,7 @@ export default function EmployeeDashboardPage() {
                 disabled={isTimeOutDisabled}
                 aria-busy={punchAction === 'out'}
                 aria-label="Time Out"
+                title={isProtectedAttendance ? 'Time out is unavailable for today\'s attendance status.' : undefined}
                 onClick={() => punch('out')}
                 className="group flex min-w-[180px] items-center gap-3 rounded-lg border border-border bg-danger-muted px-3 py-2 text-left transition-colors hover:border-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-border"
               >
@@ -201,17 +226,45 @@ export default function EmployeeDashboardPage() {
           </div>
         </Card>
 
-        {leaveStats.length ? (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {leaveStats.map((stat) => (
-              <StatCard
-                key={stat.label}
-                label={stat.label}
-                value={stat.value}
-                icon={<CalendarClock size={20} />}
-                tone={stat.tone}
-              />
-            ))}
+        {coreLeaveBalanceItems.length ? (
+          <div className="space-y-2">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {coreLeaveBalanceItems.map((item) => (
+                <Card key={item.id} className="relative overflow-hidden" padding="sm">
+                  <div className="absolute inset-y-0 left-0 w-1 bg-brand" aria-hidden="true" />
+                  <div className="flex items-start justify-between gap-3 pl-1">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <CalendarClock size={15} className="flex-shrink-0 text-brand" />
+                        <p className="truncate text-sm font-medium text-ink">{item.name}</p>
+                      </div>
+                      <p className="mt-2 text-xs text-muted">Available balance</p>
+                      <p className="text-2xl font-semibold leading-tight text-ink">{balanceNumber(item.remaining ?? item.balance)}</p>
+                    </div>
+                    <div className="grid min-w-[104px] grid-cols-2 gap-2 text-right">
+                      <div>
+                        <p className="text-xs text-muted">Pending</p>
+                        <p className="text-sm font-medium text-warning">{balanceNumber(item.pendingCredits ?? item.pending)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted">Used</p>
+                        <p className="text-sm font-medium text-neutral-90">{balanceNumber(item.used ?? item.taken)}</p>
+                      </div>
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+            {otherLeaveBalanceItems.length > 0 && (
+              <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface px-4 py-2 text-xs text-muted sm:flex-row sm:items-center sm:justify-between">
+                <span>
+                  {otherLeaveBalanceItems.length} other leave balance{otherLeaveBalanceItems.length === 1 ? '' : 's'} available.
+                </span>
+                <Link to="/employee/leave" className="font-medium text-brand hover:text-brand-700">
+                  View on My Leave
+                </Link>
+              </div>
+            )}
           </div>
         ) : (
           <EmptyState title="No leave balances are available yet." />
@@ -240,7 +293,7 @@ export default function EmployeeDashboardPage() {
               <p className="text-base font-medium text-neutral-90">This month</p>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 {[
-                  { label: 'Expected time', value: hours(monthly?.expectedHours ?? 0), percent: 100 },
+                  { label: 'Expected time to date', value: hours(monthly?.expectedHours ?? 0), percent: 100 },
                   { label: 'Worked time', value: hours(monthly?.totalHours ?? 0), percent: workedPercent },
                   { label: 'Shortage time', value: hours(monthly?.shortageHours ?? 0), percent: shortagePercent },
                   { label: 'Overtime', value: hours(monthly?.overtimeHours ?? 0), percent: monthly && monthly.expectedHours > 0 ? (monthly.overtimeHours / monthly.expectedHours) * 100 : 0 },

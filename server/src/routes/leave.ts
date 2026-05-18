@@ -22,7 +22,7 @@ import {
   reviewLeaveRequest,
   uploadLeaveDocument,
 } from '../controllers/leaveController'
-import { authenticate, employeeSelfService, requireRole } from '../middleware/auth'
+import { authenticate, employeeSelfService, leaveSelfServiceOrAdmin, requireRole } from '../middleware/auth'
 
 const router = Router()
 
@@ -30,19 +30,19 @@ router.use(authenticate)
 
 // Shared
 router.get('/types', getLeaveTypes)
-router.get('/calendar', getLeaveCalendar)
-router.post('/requests/preview', previewLeaveRequest)
+router.get('/calendar', leaveSelfServiceOrAdmin, getLeaveCalendar)
+router.post('/requests/preview', leaveSelfServiceOrAdmin, previewLeaveRequest)
 
 // Employee self-service
 router.get('/my-requests', employeeSelfService, getMyLeaveRequests)
 router.get('/requests/me', employeeSelfService, getMyLeaveRequests)
-router.get('/balance/:employeeId?', getLeaveBalance)
+router.get('/balance/:employeeId?', leaveSelfServiceOrAdmin, getLeaveBalance)
 router.get('/balances/me', employeeSelfService, getLeaveBalance)
-router.post('/requests', createLeaveRequest)
-router.patch('/requests/:id/cancel', cancelLeaveRequest)
-router.put('/requests/:id/cancel', cancelLeaveRequest)
-router.post('/requests/:id/documents', uploadLeaveDocument)
-router.get('/requests/:id', getLeaveRequestById)
+router.post('/requests', leaveSelfServiceOrAdmin, createLeaveRequest)
+router.patch('/requests/:id/cancel', leaveSelfServiceOrAdmin, cancelLeaveRequest)
+router.put('/requests/:id/cancel', leaveSelfServiceOrAdmin, cancelLeaveRequest)
+router.post('/requests/:id/documents', leaveSelfServiceOrAdmin, uploadLeaveDocument)
+router.get('/requests/:id', leaveSelfServiceOrAdmin, getLeaveRequestById)
 
 // Admin/HR
 router.get('/admin/requests', requireRole('admin'), getLeaveRequests)

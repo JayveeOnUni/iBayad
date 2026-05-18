@@ -235,15 +235,18 @@ function buildPeriodFilters(req: Request): PeriodFilters {
 async function getPeriodSummary(periodId: string, db: Queryable = pool) {
   const result = await db.query(
     `SELECT
-       (SELECT COUNT(*) FROM employees WHERE employment_status = 'active')::int AS active_employee_count,
-       COUNT(pr.id)::int AS record_count,
+       (SELECT COUNT(*)
+        FROM employees e
+        WHERE e.employment_status = 'active'
+          AND e.hire_date <= pp.end_date)::int AS active_employee_count,
+       COUNT(pr.id) FILTER (WHERE pr.status <> 'cancelled')::int AS record_count,
        COUNT(pr.id) FILTER (WHERE pr.status IN ('processing', 'processed', 'validation_failed', 'ready_for_approval', 'needs_correction'))::int AS processing_record_count,
        COUNT(pr.id) FILTER (WHERE pr.status = 'approved')::int AS approved_record_count,
        COUNT(pr.id) FILTER (WHERE pr.status IN ('released', 'locked'))::int AS released_record_count,
-       COALESCE(SUM(pr.gross_pay), 0) AS total_gross_pay,
-       COALESCE(SUM(pr.total_deductions), 0) AS total_deductions,
-       COALESCE(SUM(pr.net_pay), 0) AS total_net_pay,
-       COUNT(pr.id) FILTER (WHERE pr.net_pay < 0)::int AS negative_net_count
+       COALESCE(SUM(pr.gross_pay) FILTER (WHERE pr.status <> 'cancelled'), 0) AS total_gross_pay,
+       COALESCE(SUM(pr.total_deductions) FILTER (WHERE pr.status <> 'cancelled'), 0) AS total_deductions,
+       COALESCE(SUM(pr.net_pay) FILTER (WHERE pr.status <> 'cancelled'), 0) AS total_net_pay,
+       COUNT(pr.id) FILTER (WHERE pr.status <> 'cancelled' AND pr.net_pay < 0)::int AS negative_net_count
      FROM payroll_periods pp
      LEFT JOIN payroll_records pr ON pr.payroll_period_id = pp.id
      WHERE pp.id = $1
@@ -267,26 +270,26 @@ async function getPeriodSummary(periodId: string, db: Queryable = pool) {
 
 async function findPeriodRowById(periodId: string, db: Queryable = pool) {
   const result = await db.query(
-    `WITH active_employees AS (
-       SELECT COUNT(*)::int AS active_employee_count
-     FROM employees
-     WHERE employment_status = 'active'
-     ),
-     summaries AS (
+    `WITH summaries AS (
        SELECT payroll_period_id,
-              COUNT(*)::int AS record_count,
+              COUNT(*) FILTER (WHERE status <> 'cancelled')::int AS record_count,
               COUNT(*) FILTER (WHERE status IN ('processing', 'processed', 'validation_failed', 'ready_for_approval', 'needs_correction'))::int AS processing_record_count,
               COUNT(*) FILTER (WHERE status = 'approved')::int AS approved_record_count,
               COUNT(*) FILTER (WHERE status IN ('released', 'locked'))::int AS released_record_count,
-              COALESCE(SUM(gross_pay), 0) AS total_gross_pay,
-              COALESCE(SUM(total_deductions), 0) AS total_deductions,
-              COALESCE(SUM(net_pay), 0) AS total_net_pay,
-              COUNT(*) FILTER (WHERE net_pay < 0)::int AS negative_net_count
+              COALESCE(SUM(gross_pay) FILTER (WHERE status <> 'cancelled'), 0) AS total_gross_pay,
+              COALESCE(SUM(total_deductions) FILTER (WHERE status <> 'cancelled'), 0) AS total_deductions,
+              COALESCE(SUM(net_pay) FILTER (WHERE status <> 'cancelled'), 0) AS total_net_pay,
+              COUNT(*) FILTER (WHERE status <> 'cancelled' AND net_pay < 0)::int AS negative_net_count
        FROM payroll_records
        GROUP BY payroll_period_id
      )
      SELECT pp.*,
-            ae.active_employee_count,
+            COALESCE((
+              SELECT COUNT(*)::int
+              FROM employees e
+              WHERE e.employment_status = 'active'
+                AND e.hire_date <= pp.end_date
+            ), 0) AS active_employee_count,
             COALESCE(s.record_count, 0)::int AS record_count,
             COALESCE(s.processing_record_count, 0)::int AS processing_record_count,
             COALESCE(s.approved_record_count, 0)::int AS approved_record_count,
@@ -309,7 +312,6 @@ async function findPeriodRowById(periodId: string, db: Queryable = pool) {
                 AND lr.end_date >= pp.start_date
             ), 0)::int AS pending_leave_request_count
      FROM payroll_periods pp
-     CROSS JOIN active_employees ae
      LEFT JOIN summaries s ON s.payroll_period_id = pp.id
      WHERE pp.id = $1`,
     [periodId]
@@ -330,6 +332,8 @@ async function countMissingAttendanceRows(period: Record<string, unknown>): Prom
        FROM employees e
        CROSS JOIN work_dates wd
        WHERE e.employment_status = 'active'
+         AND e.hire_date <= $2::date
+         AND wd.work_date >= GREATEST(e.hire_date, $1::date)
      )
      SELECT COUNT(*)::int AS missing_count
      FROM expected ex
@@ -608,26 +612,26 @@ export const getPayrollPeriods = asyncHandler(async (req: Request, res: Response
   const [countResult, dataResult] = await Promise.all([
     pool.query(`SELECT COUNT(*)::int AS total FROM payroll_periods pp ${where}`, values),
     pool.query(
-      `WITH active_employees AS (
-         SELECT COUNT(*)::int AS active_employee_count
-         FROM employees
-         WHERE employment_status = 'active'
-       ),
-       summaries AS (
+      `WITH summaries AS (
          SELECT payroll_period_id,
-                COUNT(*)::int AS record_count,
+                COUNT(*) FILTER (WHERE status <> 'cancelled')::int AS record_count,
                 COUNT(*) FILTER (WHERE status IN ('processing', 'processed', 'validation_failed', 'ready_for_approval', 'needs_correction'))::int AS processing_record_count,
                 COUNT(*) FILTER (WHERE status = 'approved')::int AS approved_record_count,
                 COUNT(*) FILTER (WHERE status IN ('released', 'locked'))::int AS released_record_count,
-                COALESCE(SUM(gross_pay), 0) AS total_gross_pay,
-                COALESCE(SUM(total_deductions), 0) AS total_deductions,
-                COALESCE(SUM(net_pay), 0) AS total_net_pay,
-                COUNT(*) FILTER (WHERE net_pay < 0)::int AS negative_net_count
+                COALESCE(SUM(gross_pay) FILTER (WHERE status <> 'cancelled'), 0) AS total_gross_pay,
+                COALESCE(SUM(total_deductions) FILTER (WHERE status <> 'cancelled'), 0) AS total_deductions,
+                COALESCE(SUM(net_pay) FILTER (WHERE status <> 'cancelled'), 0) AS total_net_pay,
+                COUNT(*) FILTER (WHERE status <> 'cancelled' AND net_pay < 0)::int AS negative_net_count
          FROM payroll_records
          GROUP BY payroll_period_id
        )
        SELECT pp.*,
-              ae.active_employee_count,
+              COALESCE((
+                SELECT COUNT(*)::int
+                FROM employees e
+                WHERE e.employment_status = 'active'
+                  AND e.hire_date <= pp.end_date
+              ), 0) AS active_employee_count,
               COALESCE(s.record_count, 0)::int AS record_count,
               COALESCE(s.processing_record_count, 0)::int AS processing_record_count,
               COALESCE(s.approved_record_count, 0)::int AS approved_record_count,
@@ -650,7 +654,6 @@ export const getPayrollPeriods = asyncHandler(async (req: Request, res: Response
                   AND lr.end_date >= pp.start_date
               ), 0)::int AS pending_leave_request_count
        FROM payroll_periods pp
-       CROSS JOIN active_employees ae
        LEFT JOIN summaries s ON s.payroll_period_id = pp.id
        ${where}
        ORDER BY pp.start_date DESC, pp.created_at DESC
@@ -731,7 +734,8 @@ export const validatePayrollPeriod = asyncHandler(async (req: Request, res: Resp
          SET status = $1,
              updated_at = NOW()
          WHERE payroll_period_id = $2
-           AND is_locked = false`,
+           AND is_locked = false
+           AND status <> 'cancelled'`,
         [nextStatus, req.params.id]
       )
     }
@@ -1220,7 +1224,8 @@ export const processPayroll = asyncHandler(async (req: Request, res: Response) =
       `UPDATE payroll_records
        SET status = 'processed',
            updated_at = NOW()
-       WHERE payroll_period_id = $1`,
+       WHERE payroll_period_id = $1
+         AND status <> 'cancelled'`,
       [payrollPeriodId]
     )
 
@@ -1312,7 +1317,8 @@ export const approvePayroll = asyncHandler(async (req: Request, res: Response) =
       `UPDATE payroll_records
        SET status = 'approved',
            updated_at = NOW()
-       WHERE payroll_period_id = $1`,
+       WHERE payroll_period_id = $1
+         AND status <> 'cancelled'`,
       [req.params.id]
     )
 
@@ -1392,7 +1398,8 @@ export const releasePayroll = asyncHandler(async (req: Request, res: Response) =
            locked_by = $2,
            locked_at = NOW(),
            updated_at = NOW()
-       WHERE payroll_period_id = $1`,
+       WHERE payroll_period_id = $1
+         AND status <> 'cancelled'`,
       [req.params.id, req.user!.userId]
     )
     await client.query(
@@ -1484,7 +1491,8 @@ export const requestPayrollCorrection = asyncHandler(async (req: Request, res: R
        SET status = 'needs_correction',
            updated_at = NOW()
        WHERE payroll_period_id = $1
-         AND is_locked = false`,
+         AND is_locked = false
+         AND status <> 'cancelled'`,
       [req.params.id]
     )
 

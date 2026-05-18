@@ -142,7 +142,7 @@ export interface Shift {
 
 // ─── Attendance ───────────────────────────────────────────────────────────────
 
-export type AttendanceStatus = 'present' | 'absent' | 'late' | 'half_day' | 'on_leave' | 'holiday'
+export type AttendanceStatus = 'present' | 'absent' | 'late' | 'half_day' | 'on_leave' | 'holiday' | 'rest_day'
 
 export interface AttendanceRecord {
   id: string
@@ -835,6 +835,18 @@ export interface AdminDashboardData {
   }>
 }
 
+export interface EmployeeDashboardLeaveBalanceItem extends LeaveBalance {
+  leaveTypeId: string
+  code: string
+  name: string
+  isPaid: boolean
+  entitlementStage: string
+  allowance: number
+  taken: number
+  pending: number
+  balance: number
+}
+
 export interface EmployeeDashboardData {
   employee: {
     id: string
@@ -886,16 +898,7 @@ export interface EmployeeDashboardData {
     totalTaken: number
     totalAvailable: number
     pendingRequests: number
-    items: Array<{
-      id: string
-      name: string
-      code: string
-      isPaid: boolean
-      allowance: number
-      taken: number
-      pending: number
-      balance: number
-    }>
+    items: EmployeeDashboardLeaveBalanceItem[]
   }
   announcements: Array<{
     id: string

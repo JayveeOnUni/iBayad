@@ -1,4 +1,5 @@
 import { addDays, differenceInCalendarDays, format, isAfter, isBefore, parseISO } from 'date-fns'
+import type { Pool, PoolClient } from 'pg'
 import pool from '../utils/db'
 import { HolidayCalendarService } from './holidayCalendarService'
 
@@ -70,6 +71,8 @@ export interface LeaveValidationResult {
   errors: string[]
 }
 
+type Queryable = Pool | PoolClient
+
 const EMERGENCY_REASONS = new Set([
   'family_accident_hospitalization_serious_sickness',
   'natural_calamity',
@@ -100,8 +103,8 @@ export class LeavePolicyService {
     return format(value, 'yyyy-MM-dd')
   }
 
-  static async getEmployee(employeeId: string): Promise<LeaveEmployeeRow | undefined> {
-    const result = await pool.query(
+  static async getEmployee(employeeId: string, db: Queryable = pool): Promise<LeaveEmployeeRow | undefined> {
+    const result = await db.query(
       `SELECT e.*, ws.start_time AS shift_start_time
        FROM employees e
        LEFT JOIN work_shifts ws ON ws.id = e.shift_id
@@ -111,8 +114,8 @@ export class LeavePolicyService {
     return result.rows[0] as LeaveEmployeeRow | undefined
   }
 
-  static async getLeaveType(leaveTypeId: string): Promise<LeaveTypePolicyRow | undefined> {
-    const result = await pool.query(
+  static async getLeaveType(leaveTypeId: string, db: Queryable = pool): Promise<LeaveTypePolicyRow | undefined> {
+    const result = await db.query(
       `SELECT id, code, name, is_paid, COALESCE(is_accrual_based, false) AS is_accrual_based,
               COALESCE(requires_balance, false) AS requires_balance,
               COALESCE(applies_to_probationary, false) AS applies_to_probationary,
@@ -131,8 +134,8 @@ export class LeavePolicyService {
     return result.rows[0] as LeaveTypePolicyRow | undefined
   }
 
-  static async getLeaveTypeByCode(code: LeaveCode): Promise<LeaveTypePolicyRow | undefined> {
-    const result = await pool.query(
+  static async getLeaveTypeByCode(code: LeaveCode, db: Queryable = pool): Promise<LeaveTypePolicyRow | undefined> {
+    const result = await db.query(
       `SELECT id, code, name, is_paid, COALESCE(is_accrual_based, false) AS is_accrual_based,
               COALESCE(requires_balance, false) AS requires_balance,
               COALESCE(applies_to_probationary, false) AS applies_to_probationary,
@@ -163,7 +166,8 @@ export class LeavePolicyService {
     leaveType: LeaveTypePolicyRow,
     employee: LeaveEmployeeRow,
     startDate: Date,
-    endDate: Date
+    endDate: Date,
+    db: Queryable = pool
   ): Promise<number> {
     if (leaveType.day_count_type === 'calendar_days') {
       return differenceInCalendarDays(endDate, startDate) + 1
@@ -174,7 +178,7 @@ export class LeavePolicyService {
       endDate,
       country: employee.nationality && employee.nationality !== 'Filipino' ? employee.nationality : 'Philippines',
       cityOrProvince: employee.city ?? employee.province ?? undefined,
-    })
+    }, db)
   }
 
   static monthsEarnedForYear(employee: LeaveEmployeeRow, year: number, asOf = new Date()): number {

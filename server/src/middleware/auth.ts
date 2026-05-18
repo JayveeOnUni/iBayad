@@ -157,6 +157,23 @@ export const employeeSelfService = [
 ]
 
 /**
+ * Leave self-service/admin shorthand.
+ * Keeps leave actions limited to employees and full admins. Super admins inherit
+ * admin access through requireRole.
+ */
+export const leaveSelfServiceOrAdmin = [
+  requireRole('employee', 'admin'),
+  (req: Request, res: Response, next: NextFunction): void => {
+    if (req.user?.role === 'employee' && !req.user.employeeId) {
+      res.status(403).json({ success: false, message: 'No employee profile is linked to this account' })
+      return
+    }
+
+    next()
+  },
+]
+
+/**
  * Admin-only shorthand.
  */
 export const adminOnly = requireRole('admin')

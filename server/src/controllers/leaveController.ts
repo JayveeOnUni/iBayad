@@ -16,6 +16,23 @@ function actor(req: Request) {
   }
 }
 
+function isLeaveAdmin(req: Request): boolean {
+  return req.user?.role === 'admin' || req.user?.role === 'super_admin'
+}
+
+function assertLeaveSelfServiceOrAdmin(req: Request): void {
+  if (req.user?.role === 'employee') {
+    if (!req.user.employeeId) throw createError('No employee profile is linked to this account', 403)
+    return
+  }
+  if (isLeaveAdmin(req)) return
+  throw createError('This account is not allowed to perform leave actions', 403)
+}
+
+function assertLeaveAdmin(req: Request): void {
+  if (!isLeaveAdmin(req)) throw createError('This account is not allowed to manage leave requests', 403)
+}
+
 function normalizeLeaveBody(req: Request, employeeId: string) {
   return {
     employeeId,
@@ -82,6 +99,7 @@ export const getMyLeaveRequests = asyncHandler(async (req: Request, res: Respons
 })
 
 export const getLeaveRequestById = asyncHandler(async (req: Request, res: Response) => {
+  assertLeaveSelfServiceOrAdmin(req)
   const data = await LeaveRequestService.getById(req.params.id)
   if (!data) throw createError('Leave request not found', 404)
   if (req.user?.role === 'employee' && data.employee_id !== req.user.employeeId) {
@@ -91,6 +109,7 @@ export const getLeaveRequestById = asyncHandler(async (req: Request, res: Respon
 })
 
 export const getLeaveBalance = asyncHandler(async (req: Request, res: Response) => {
+  assertLeaveSelfServiceOrAdmin(req)
   const requestedEmployeeId = req.params.employeeId
   const employeeId = requestedEmployeeId || req.user?.employeeId
   if (!employeeId) throw createError('employeeId is required', 400)
@@ -104,8 +123,9 @@ export const getLeaveBalance = asyncHandler(async (req: Request, res: Response) 
 })
 
 export const previewLeaveRequest = asyncHandler(async (req: Request, res: Response) => {
+  assertLeaveSelfServiceOrAdmin(req)
   const requestedEmployeeId = req.body.employeeId ? String(req.body.employeeId) : undefined
-  const canRequestForOthers = req.user?.role === 'admin'
+  const canRequestForOthers = isLeaveAdmin(req)
   const employeeId = canRequestForOthers && requestedEmployeeId ? requestedEmployeeId : req.user?.employeeId
   if (!employeeId) throw createError('No employee profile is linked to this user', 400)
   if (req.user?.role === 'employee' && requestedEmployeeId && requestedEmployeeId !== req.user.employeeId) {
@@ -116,8 +136,9 @@ export const previewLeaveRequest = asyncHandler(async (req: Request, res: Respon
 })
 
 export const createLeaveRequest = asyncHandler(async (req: Request, res: Response) => {
+  assertLeaveSelfServiceOrAdmin(req)
   const requestedEmployeeId = req.body.employeeId ? String(req.body.employeeId) : undefined
-  const canRequestForOthers = req.user?.role === 'admin'
+  const canRequestForOthers = isLeaveAdmin(req)
   const employeeId = canRequestForOthers && requestedEmployeeId ? requestedEmployeeId : req.user?.employeeId
   if (!employeeId) throw createError('No employee profile is linked to this user', 400)
   if (req.user?.role === 'employee' && requestedEmployeeId && requestedEmployeeId !== req.user.employeeId) {
@@ -136,6 +157,7 @@ export const createLeaveRequest = asyncHandler(async (req: Request, res: Respons
 })
 
 export const approveLeaveRequest = asyncHandler(async (req: Request, res: Response) => {
+  assertLeaveAdmin(req)
   try {
     const data = await LeaveApprovalService.approve(req.params.id, actor(req), req.body.remarks)
     res.json({ success: true, data })
@@ -145,6 +167,7 @@ export const approveLeaveRequest = asyncHandler(async (req: Request, res: Respon
 })
 
 export const rejectLeaveRequest = asyncHandler(async (req: Request, res: Response) => {
+  assertLeaveAdmin(req)
   try {
     const data = await LeaveApprovalService.reject(req.params.id, actor(req), String(req.body.remarks ?? req.body.reason ?? ''))
     res.json({ success: true, data })
@@ -154,6 +177,7 @@ export const rejectLeaveRequest = asyncHandler(async (req: Request, res: Respons
 })
 
 export const reviewLeaveRequest = asyncHandler(async (req: Request, res: Response) => {
+  assertLeaveAdmin(req)
   const action = String(req.body.action ?? '')
   if (action === 'approve') {
     const data = await LeaveApprovalService.approve(req.params.id, actor(req), req.body.remarks)
@@ -169,6 +193,14 @@ export const reviewLeaveRequest = asyncHandler(async (req: Request, res: Respons
 })
 
 export const cancelLeaveRequest = asyncHandler(async (req: Request, res: Response) => {
+  assertLeaveSelfServiceOrAdmin(req)
+  if (req.user?.role === 'employee') {
+    const request = await LeaveRequestService.getById(req.params.id)
+    if (!request) throw createError('Leave request not found', 404)
+    if (request.employee_id !== req.user.employeeId) {
+      throw createError('Employees can only cancel their own leave requests', 403)
+    }
+  }
   try {
     const data = await LeaveApprovalService.cancel(req.params.id, actor(req), req.body.remarks)
     res.json({ success: true, data })
@@ -178,8 +210,17 @@ export const cancelLeaveRequest = asyncHandler(async (req: Request, res: Respons
 })
 
 export const uploadLeaveDocument = asyncHandler(async (req: Request, res: Response) => {
+  assertLeaveSelfServiceOrAdmin(req)
   if (!req.body.documentType || !req.body.fileName || !req.body.fileUrl) {
     throw createError('documentType, fileName, and fileUrl are required', 400)
+  }
+  if (String(req.body.fileUrl).startsWith('metadata://')) {
+    throw createError('Declared document placeholders cannot be uploaded as files', 400)
+  }
+  const request = await LeaveRequestService.getById(req.params.id)
+  if (!request) throw createError('Leave request not found', 404)
+  if (req.user?.role === 'employee' && request.employee_id !== req.user.employeeId) {
+    throw createError('Employees can only upload documents for their own leave requests', 403)
   }
   const data = await LeaveRequestService.attachDocument({
     leaveRequestId: req.params.id,
@@ -193,6 +234,7 @@ export const uploadLeaveDocument = asyncHandler(async (req: Request, res: Respon
 })
 
 export const adjustLeaveBalance = asyncHandler(async (req: Request, res: Response) => {
+  assertLeaveAdmin(req)
   const { leaveTypeId, year, field, amount, remarks } = req.body
   if (!leaveTypeId || !year || !field || amount == null) {
     throw createError('leaveTypeId, year, field, and amount are required', 400)

@@ -1,4 +1,5 @@
 import pool from '../utils/db'
+import type { Pool, PoolClient } from 'pg'
 import { LeaveCode, LeaveEmployeeRow, LeavePolicyService } from './leavePolicyService'
 
 export interface LeaveBalanceSummary {
@@ -7,6 +8,7 @@ export interface LeaveBalanceSummary {
   leave_type_id: string
   code: LeaveCode
   name: string
+  is_paid: boolean
   year: number
   opening_balance: number
   earned_credits: number
@@ -23,8 +25,11 @@ interface LeaveBalanceTypeRow {
   id: string
   code: LeaveCode
   name: string
+  is_paid: boolean
   days_per_year: unknown
 }
+
+type Queryable = Pool | PoolClient
 
 function toNumber(value: unknown): number {
   const numberValue = Number(value ?? 0)
@@ -32,12 +37,12 @@ function toNumber(value: unknown): number {
 }
 
 export class LeaveBalanceService {
-  static async getBalances(employeeId: string, year: number, asOf = new Date()): Promise<LeaveBalanceSummary[]> {
-    const employee = await LeavePolicyService.getEmployee(employeeId)
+  static async getBalances(employeeId: string, year: number, asOf = new Date(), db: Queryable = pool): Promise<LeaveBalanceSummary[]> {
+    const employee = await LeavePolicyService.getEmployee(employeeId, db)
     if (!employee) throw new Error('Employee not found')
 
-    const typeResult = await pool.query(
-      `SELECT id, code, name, days_per_year FROM leave_types
+    const typeResult = await db.query(
+      `SELECT id, code, name, is_paid, days_per_year FROM leave_types
        WHERE is_active = true
          AND code IN ('VACATION', 'SICK', 'EMERGENCY', 'BEREAVEMENT', 'NON_PAID', 'MATERNITY', 'PATERNITY')
        ORDER BY CASE code
@@ -48,16 +53,23 @@ export class LeaveBalanceService {
 
     return Promise.all(
       typeResult.rows.map((row: LeaveBalanceTypeRow) =>
-        this.getBalanceFor(employee, row.id, row.code, row.name, toNumber(row.days_per_year), year, asOf)
+        this.getBalanceFor(employee, row.id, row.code, row.name, Boolean(row.is_paid), toNumber(row.days_per_year), year, asOf, db)
       )
     )
   }
 
-  static async getAvailable(employeeId: string, code: LeaveCode, year: number, asOf = new Date()): Promise<number> {
-    const employee = await LeavePolicyService.getEmployee(employeeId)
-    const leaveType = await LeavePolicyService.getLeaveTypeByCode(code)
+  static async getAvailable(
+    employeeId: string,
+    code: LeaveCode,
+    year: number,
+    asOf = new Date(),
+    options: { excludeLeaveRequestId?: string; db?: Queryable } = {}
+  ): Promise<number> {
+    const db = options.db ?? pool
+    const employee = await LeavePolicyService.getEmployee(employeeId, db)
+    const leaveType = await LeavePolicyService.getLeaveTypeByCode(code, db)
     if (!employee || !leaveType) return 0
-    const typeRow = await pool.query<{ days_per_year: unknown }>(
+    const typeRow = await db.query<{ days_per_year: unknown }>(
       `SELECT days_per_year FROM leave_types WHERE id = $1`,
       [leaveType.id]
     )
@@ -66,9 +78,12 @@ export class LeaveBalanceService {
       leaveType.id,
       code,
       leaveType.name,
+      Boolean(leaveType.is_paid),
       toNumber(typeRow.rows[0]?.days_per_year),
       year,
-      asOf
+      asOf,
+      db,
+      options.excludeLeaveRequestId
     )
     return balance.available_balance
   }
@@ -78,14 +93,17 @@ export class LeaveBalanceService {
     leaveTypeId: string,
     code: LeaveCode,
     name: string,
+    isPaid: boolean,
     daysPerYear: number,
     year: number,
-    asOf: Date
+    asOf: Date,
+    db: Queryable = pool,
+    excludeLeaveRequestId?: string
   ): Promise<LeaveBalanceSummary> {
     const entitlement = await LeavePolicyService.configuredEntitlementFor(employee, year, code)
     const earned = await LeavePolicyService.configuredEarnedCreditsFor(employee, year, code, asOf)
 
-    const stored = await pool.query(
+    const stored = await db.query(
       `SELECT opening_balance, carried_over_credits, forfeited_credits, converted_to_cash_credits
        FROM leave_balances
        WHERE employee_id = $1 AND leave_type_id = $2 AND year = $3`,
@@ -97,7 +115,7 @@ export class LeaveBalanceService {
     const forfeited = toNumber(storedRow?.forfeited_credits)
     const converted = toNumber(storedRow?.converted_to_cash_credits)
 
-    const usage = await this.getUsage(employee.id, code, year)
+    const usage = await this.getUsage(employee.id, code, year, db, excludeLeaveRequestId)
     const nonAccrualOpening = ['EMERGENCY', 'NON_PAID'].includes(code) ? 0 : daysPerYear
     const baseCredits = code === 'VACATION' || code === 'SICK' ? opening + carried + earned : nonAccrualOpening
     const available = Math.max(0, Math.round((baseCredits - usage.used - usage.pending - forfeited - converted) * 100) / 100)
@@ -108,6 +126,7 @@ export class LeaveBalanceService {
       leave_type_id: leaveTypeId,
       code,
       name,
+      is_paid: isPaid,
       year,
       opening_balance: opening,
       earned_credits: earned,
@@ -121,8 +140,14 @@ export class LeaveBalanceService {
     }
   }
 
-  private static async getUsage(employeeId: string, code: LeaveCode, year: number): Promise<{ used: number; pending: number }> {
-    const result = await pool.query(
+  private static async getUsage(
+    employeeId: string,
+    code: LeaveCode,
+    year: number,
+    db: Queryable = pool,
+    excludeLeaveRequestId?: string
+  ): Promise<{ used: number; pending: number }> {
+    const result = await db.query(
       `SELECT
          COALESCE(SUM(CASE
            WHEN lr.status = 'approved' AND lt.code = $2 THEN lr.total_days
@@ -132,12 +157,16 @@ export class LeaveBalanceService {
            ELSE 0 END), 0) AS used,
          COALESCE(SUM(CASE
            WHEN lr.status = 'pending' AND lt.code = $2 THEN lr.total_days
+           WHEN lr.status = 'pending' AND $2 = 'SICK' THEN lr.deducted_sick_days
+           WHEN lr.status = 'pending' AND $2 = 'VACATION' THEN lr.deducted_vacation_days
+           WHEN lr.status = 'pending' AND $2 = 'NON_PAID' THEN lr.unpaid_days
            ELSE 0 END), 0) AS pending
        FROM leave_requests lr
        JOIN leave_types lt ON lt.id = lr.leave_type_id
        WHERE lr.employee_id = $1
-         AND EXTRACT(YEAR FROM lr.start_date) = $3`,
-      [employeeId, code, year]
+         AND EXTRACT(YEAR FROM lr.start_date) = $3
+         AND ($4::uuid IS NULL OR lr.id <> $4::uuid)`,
+      [employeeId, code, year, excludeLeaveRequestId ?? null]
     )
 
     return {

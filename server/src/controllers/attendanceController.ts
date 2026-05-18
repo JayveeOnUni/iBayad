@@ -6,6 +6,7 @@ import {
   createOffsetAdjustment,
   createOffsetUsageRequest,
   getEmployeeShift,
+  isProtectedAttendanceStatus,
   getOffsetBalances,
   listOffsetCredits,
   listOffsetUsages,
@@ -15,6 +16,11 @@ import {
   reviewOffsetCredit,
   reviewOffsetUsage,
 } from '../services/attendanceOffsetService'
+
+function protectedPunchMessage(status?: string | null): string {
+  const label = String(status ?? 'attendance').replace(/_/g, ' ')
+  return `Time in/out is not allowed because today's attendance is already marked as ${label}. Please contact HR or your administrator if this needs correction.`
+}
 
 export const getAttendanceLogs = asyncHandler(async (req: Request, res: Response) => {
   const { employeeId, startDate, endDate, status } = req.query
@@ -68,9 +74,13 @@ export const clockIn = asyncHandler(async (req: Request, res: Response) => {
 
   // Check if already clocked in today
   const existing = await pool.query(
-    `SELECT id, time_in FROM attendance WHERE employee_id = $1 AND date = $2`,
+    `SELECT id, time_in, status FROM attendance WHERE employee_id = $1 AND date = $2`,
     [req.user!.employeeId, today]
   )
+
+  if (isProtectedAttendanceStatus(existing.rows[0]?.status)) {
+    throw createError(protectedPunchMessage(existing.rows[0].status), 400)
+  }
 
   if (existing.rows[0]?.time_in) {
     throw createError('Already clocked in today', 400)
@@ -98,6 +108,8 @@ export const clockIn = asyncHandler(async (req: Request, res: Response) => {
          scheduled_end = $8,
          required_work_minutes = $9,
          updated_at = NOW()
+     WHERE attendance.status IS NULL
+        OR attendance.status NOT IN ('absent', 'holiday', 'rest_day', 'on_leave')
      RETURNING *`,
     [
       employeeId,
@@ -112,6 +124,7 @@ export const clockIn = asyncHandler(async (req: Request, res: Response) => {
       req.user!.userId,
     ]
   )
+  if (!result.rows[0]) throw createError(protectedPunchMessage(existing.rows[0]?.status), 400)
   res.json({ success: true, data: result.rows[0] })
 })
 
@@ -125,6 +138,9 @@ export const clockOut = asyncHandler(async (req: Request, res: Response) => {
   )
 
   if (!existing.rows[0]) throw createError('No clock-in record found for today', 400)
+  if (isProtectedAttendanceStatus(existing.rows[0].status)) {
+    throw createError(protectedPunchMessage(existing.rows[0].status), 400)
+  }
   if (existing.rows[0].time_out) throw createError('Already clocked out today', 400)
 
   const result = await pool.query(

@@ -130,14 +130,16 @@ export async function buildPayrollValidationReport(
        WHERE EXTRACT(ISODOW FROM day) BETWEEN 1 AND 5
      ),
      active_employees AS (
-       SELECT id, employee_number, first_name, last_name, basic_salary, work_days_per_month, work_hours_per_day
+       SELECT id, employee_number, first_name, last_name, hire_date, basic_salary, work_days_per_month, work_hours_per_day
        FROM employees
        WHERE employment_status = 'active'
+         AND hire_date <= $3::date
      ),
      expected AS (
        SELECT ae.id AS employee_id, wd.work_date
        FROM active_employees ae
        CROSS JOIN work_dates wd
+       WHERE wd.work_date >= GREATEST(ae.hire_date, $2::date)
      ),
      missing_attendance AS (
        SELECT ex.employee_id, ex.work_date
@@ -164,6 +166,7 @@ export async function buildPayrollValidationReport(
               pre_tax_deductions, statutory_deductions, post_tax_deductions
        FROM payroll_records
        WHERE payroll_period_id = $1
+         AND status <> 'cancelled'
      ),
      missing_payroll AS (
        SELECT ae.id AS employee_id,
