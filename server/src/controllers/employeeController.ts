@@ -21,9 +21,12 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const DEFAULT_WORK_DAYS_PER_MONTH = 22
 const DEFAULT_WORK_HOURS_PER_DAY = 8
+const MAX_WORK_DAYS_PER_MONTH = 31
+const MAX_WORK_HOURS_PER_DAY = 24
+const MAX_BASIC_SALARY = 10000000
 const GENDER_VALUES = ['male', 'female', 'other'] as const
 const CIVIL_STATUS_VALUES = ['single', 'married', 'widowed', 'separated'] as const
-const EMPLOYMENT_TYPE_VALUES = ['regular', 'probationary', 'contractual', 'part_time', 'intern'] as const
+const EMPLOYMENT_TYPE_VALUES = ['regular', 'probationary', 'contractual', 'part_time'] as const
 const EMPLOYEE_STATUS_VALUES = ['active', 'inactive', 'terminated', 'resigned'] as const
 
 type GenderValue = typeof GENDER_VALUES[number]
@@ -370,6 +373,17 @@ async function normalizeCreateEmployeeInput(body: Record<string, unknown>): Prom
     'Work hours per day',
     errors
   )
+
+  if (basicSalary > MAX_BASIC_SALARY) {
+    addFieldError(errors, 'basicSalary', `Monthly salary must not exceed ${MAX_BASIC_SALARY.toLocaleString('en-US')}`)
+  }
+  if (workDaysPerMonth != null && workDaysPerMonth > MAX_WORK_DAYS_PER_MONTH) {
+    addFieldError(errors, 'workDaysPerMonth', `Work days per month must not exceed ${MAX_WORK_DAYS_PER_MONTH}`)
+  }
+  if (providedWorkHoursPerDay != null && providedWorkHoursPerDay > MAX_WORK_HOURS_PER_DAY) {
+    addFieldError(errors, 'workHoursPerDay', `Work hours per day must not exceed ${MAX_WORK_HOURS_PER_DAY}`)
+  }
+
   const gender = optionalEnum(body.gender, 'gender', 'Gender', GENDER_VALUES, errors)
   const civilStatus = optionalEnum(body.civilStatus, 'civilStatus', 'Civil status', CIVIL_STATUS_VALUES, errors)
   const employmentType = optionalEnum(
@@ -430,9 +444,15 @@ async function normalizeCreateEmployeeInput(body: Record<string, unknown>): Prom
 
   if (!Number.isFinite(finalWorkDaysPerMonth) || finalWorkDaysPerMonth <= 0) {
     addFieldError(errors, 'workDaysPerMonth', 'Work days per month must be greater than 0')
+  } else if (!Number.isInteger(finalWorkDaysPerMonth)) {
+    addFieldError(errors, 'workDaysPerMonth', 'Work days per month must be a whole number')
+  } else if (finalWorkDaysPerMonth > MAX_WORK_DAYS_PER_MONTH) {
+    addFieldError(errors, 'workDaysPerMonth', `Work days per month must not exceed ${MAX_WORK_DAYS_PER_MONTH}`)
   }
   if (!Number.isFinite(finalWorkHoursPerDay) || finalWorkHoursPerDay <= 0) {
     addFieldError(errors, 'workHoursPerDay', 'Work hours per day must be greater than 0')
+  } else if (finalWorkHoursPerDay > MAX_WORK_HOURS_PER_DAY) {
+    addFieldError(errors, 'workHoursPerDay', `Work hours per day must not exceed ${MAX_WORK_HOURS_PER_DAY}`)
   }
   if (hasValidationErrors(errors)) throwValidationError(errors)
 

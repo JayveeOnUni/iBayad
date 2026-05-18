@@ -83,6 +83,10 @@ const migrations = [
     name: '019_payroll_settings_seeds',
     file: 'src/db/add-payroll-settings-seeds.sql',
   },
+  {
+    name: '020_remove_intern_employment_type',
+    file: 'src/db/remove-intern-employment-type.sql',
+  },
 ]
 
 function resolveSqlFile(relativeFile) {

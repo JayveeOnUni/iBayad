@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { useForm } from 'react-hook-form'
+import { useForm, type FieldPath, type UseFormSetError } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import Button from '../../../components/ui/Button'
@@ -19,6 +19,7 @@ import {
 import type { EmployeeFormData } from '../../../types'
 
 type CreateEmployeeResponse = Awaited<ReturnType<typeof employeeService.create>>
+type ServerValidationDetails = Record<string, string[] | string>
 
 interface AddEmployeeModalProps {
   isOpen: boolean
@@ -32,6 +33,39 @@ const governmentIdFields = [
   { key: 'pagibigNumber', label: 'Pag-IBIG Number', placeholder: 'e.g. 1234-5678-9012' },
   { key: 'tinNumber', label: 'TIN Number', placeholder: 'e.g. 123-456-789-000' },
 ] as const
+
+const MAX_WORK_DAYS_PER_MONTH = 31
+const MAX_WORK_HOURS_PER_DAY = 24
+const MAX_BASIC_SALARY = 10000000
+
+const employeeFormFields = new Set<keyof EmployeeFormData>([
+  'firstName',
+  'middleName',
+  'lastName',
+  'email',
+  'phone',
+  'birthDate',
+  'gender',
+  'civilStatus',
+  'address',
+  'city',
+  'province',
+  'zipCode',
+  'departmentId',
+  'positionId',
+  'employmentType',
+  'hireDate',
+  'shiftId',
+  'basicSalary',
+  'workDaysPerMonth',
+  'workHoursPerDay',
+  'sssNumber',
+  'philhealthNumber',
+  'pagibigNumber',
+  'tinNumber',
+  'bankName',
+  'bankAccountNumber',
+])
 
 function isDateOnly(value: string): boolean {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
@@ -60,6 +94,15 @@ const optionalDate = z
   .trim()
   .refine((value) => value === '' || isDateOnly(value), 'Enter a valid date')
 
+function numberInput(schema: z.ZodNumber) {
+  return z.preprocess((value) => {
+    if (value === '' || value === null || value === undefined) return undefined
+    if (typeof value === 'number') return Number.isFinite(value) ? value : undefined
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : value
+  }, schema)
+}
+
 const employeeFormSchema = z.object({
   firstName: z.string().trim().min(1, 'First name is required'),
   middleName: z.string().trim(),
@@ -78,9 +121,25 @@ const employeeFormSchema = z.object({
   employmentType: z.enum(['regular', 'probationary', 'contractual', 'part_time']),
   hireDate: z.string().trim().min(1, 'Hire date is required').refine(isDateOnly, 'Enter a valid hire date'),
   shiftId: z.string().trim(),
-  basicSalary: z.coerce.number().positive('Monthly salary must be greater than 0'),
-  workDaysPerMonth: z.coerce.number().int('Work days must be a whole number').positive('Work days must be greater than 0'),
-  workHoursPerDay: z.coerce.number().positive('Work hours must be greater than 0'),
+  basicSalary: numberInput(
+    z
+      .number({ required_error: 'Monthly salary is required', invalid_type_error: 'Monthly salary must be a valid number' })
+      .positive('Monthly salary must be greater than 0')
+      .max(MAX_BASIC_SALARY, `Monthly salary must not exceed ${MAX_BASIC_SALARY.toLocaleString('en-US')}`)
+  ),
+  workDaysPerMonth: numberInput(
+    z
+      .number({ required_error: 'Work days are required', invalid_type_error: 'Work days must be a valid number' })
+      .int('Work days must be a whole number')
+      .positive('Work days must be greater than 0')
+      .max(MAX_WORK_DAYS_PER_MONTH, `Work days must not exceed ${MAX_WORK_DAYS_PER_MONTH}`)
+  ),
+  workHoursPerDay: numberInput(
+    z
+      .number({ required_error: 'Work hours are required', invalid_type_error: 'Work hours must be a valid number' })
+      .positive('Work hours must be greater than 0')
+      .max(MAX_WORK_HOURS_PER_DAY, `Work hours must not exceed ${MAX_WORK_HOURS_PER_DAY}`)
+  ),
   sssNumber: optionalGovernmentId,
   philhealthNumber: optionalGovernmentId,
   pagibigNumber: optionalGovernmentId,
@@ -151,6 +210,36 @@ function toPayload(values: EmployeeFormData): EmployeeFormData {
   }
 }
 
+function getServerValidationDetails(error: unknown): ServerValidationDetails | null {
+  if (!error || typeof error !== 'object' || !('details' in error)) return null
+  const details = (error as { details?: unknown }).details
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return null
+  return details as ServerValidationDetails
+}
+
+function applyServerFieldErrors(
+  details: ServerValidationDetails,
+  setError: UseFormSetError<EmployeeFormData>
+): boolean {
+  let hasFieldError = false
+
+  Object.entries(details).forEach(([field, value]) => {
+    if (!employeeFormFields.has(field as keyof EmployeeFormData)) return
+
+    const message = Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === 'string' && item.trim() !== '').join(' ')
+      : typeof value === 'string'
+        ? value
+        : ''
+
+    if (!message) return
+    setError(field as FieldPath<EmployeeFormData>, { type: 'server', message })
+    hasFieldError = true
+  })
+
+  return hasFieldError
+}
+
 function formatShift(shift: ActiveShiftLookup): string {
   return `${shift.name} (${shift.startTime}-${shift.endTime}, ${shift.workingHoursPerDay}h)`
 }
@@ -178,6 +267,8 @@ export default function AddEmployeeModal({ isOpen, onClose, onCreated }: AddEmpl
     handleSubmit,
     reset,
     setValue,
+    setError,
+    clearErrors,
     getValues,
     watch,
     formState: { errors },
@@ -260,11 +351,16 @@ export default function AddEmployeeModal({ isOpen, onClose, onCreated }: AddEmpl
     try {
       setIsSaving(true)
       setSaveError(null)
+      clearErrors()
       const response = await employeeService.create(toPayload(values))
       await onCreated(response)
       reset(defaultEmployeeForm())
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : 'Unable to create employee.')
+      const details = getServerValidationDetails(err)
+      const mappedFieldErrors = details ? applyServerFieldErrors(details, setError) : false
+      if (!mappedFieldErrors) {
+        setSaveError(err instanceof Error ? err.message : 'Unable to create employee.')
+      }
     } finally {
       setIsSaving(false)
     }
@@ -385,7 +481,8 @@ export default function AddEmployeeModal({ isOpen, onClose, onCreated }: AddEmpl
           <Input
             label="Monthly Salary"
             type="number"
-            min="0"
+            min="0.01"
+            max={MAX_BASIC_SALARY}
             step="0.01"
             required
             error={errors.basicSalary?.message}
@@ -395,6 +492,7 @@ export default function AddEmployeeModal({ isOpen, onClose, onCreated }: AddEmpl
             label="Work Days per Month"
             type="number"
             min="1"
+            max={MAX_WORK_DAYS_PER_MONTH}
             step="1"
             required
             error={errors.workDaysPerMonth?.message}
@@ -404,6 +502,7 @@ export default function AddEmployeeModal({ isOpen, onClose, onCreated }: AddEmpl
             label="Work Hours per Day"
             type="number"
             min="0.25"
+            max={MAX_WORK_HOURS_PER_DAY}
             step="0.25"
             required
             error={errors.workHoursPerDay?.message}

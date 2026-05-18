@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Search, Download } from 'lucide-react'
+import { Plus, Search, Download, RefreshCw } from 'lucide-react'
 import Card from '../../../components/ui/Card'
 import Button from '../../../components/ui/Button'
 import Table, { Pagination } from '../../../components/ui/Table'
@@ -17,6 +17,13 @@ import AddEmployeeModal from './AddEmployeeModal'
 
 type CreateEmployeeResponse = Awaited<ReturnType<typeof employeeService.create>>
 
+interface ActivationFollowUp {
+  employeeId: string
+  email: string
+  message: string
+  activationLink?: string
+}
+
 export default function EmployeeListPage() {
   const navigate = useNavigate()
   const [search, setSearch] = useState('')
@@ -29,6 +36,8 @@ export default function EmployeeListPage() {
   const [isExporting, setIsExporting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [activationFollowUp, setActivationFollowUp] = useState<ActivationFollowUp | null>(null)
+  const [isResendingActivation, setIsResendingActivation] = useState(false)
   const [isAddOpen, setIsAddOpen] = useState(false)
 
   const loadEmployees = useCallback(async () => {
@@ -58,11 +67,45 @@ export default function EmployeeListPage() {
   const handleEmployeeCreated = async (res: CreateEmployeeResponse) => {
     setIsAddOpen(false)
     await loadEmployees()
+
+    if (res.activationEmailSent === false) {
+      setSuccess(null)
+      setActivationFollowUp({
+        employeeId: res.data.id,
+        email: res.data.email,
+        message: res.message ?? `Employee account created, but activation email could not be sent to ${res.data.email}.`,
+        activationLink: res.activationLink,
+      })
+      return
+    }
+
+    setActivationFollowUp(null)
     setSuccess(
       res.activationLink
         ? `${res.message ?? 'Employee account created.'} Activation link: ${res.activationLink}`
         : res.message ?? 'Employee account created. Activation email sent.'
     )
+  }
+
+  const resendActivation = async () => {
+    if (!activationFollowUp) return
+
+    try {
+      setIsResendingActivation(true)
+      setError(null)
+      setSuccess(null)
+      const res = await employeeService.resendActivation(activationFollowUp.employeeId)
+      setActivationFollowUp(null)
+      setSuccess(
+        res.activationLink
+          ? `${res.message ?? 'Activation email sent.'} Activation link: ${res.activationLink}`
+          : res.message ?? `Activation email sent to ${activationFollowUp.email}.`
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to resend activation email.')
+    } finally {
+      setIsResendingActivation(false)
+    }
   }
 
   const exportEmployees = async () => {
@@ -130,6 +173,7 @@ export default function EmployeeListPage() {
             onClick={() => {
               setError(null)
               setSuccess(null)
+              setActivationFollowUp(null)
               setIsAddOpen(true)
             }}
           >
@@ -148,6 +192,37 @@ export default function EmployeeListPage() {
       {success && (
         <FeedbackMessage variant="success">
           {success}
+        </FeedbackMessage>
+      )}
+
+      {activationFollowUp && (
+        <FeedbackMessage variant="warning">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-1">
+              <p>{activationFollowUp.message}</p>
+              {activationFollowUp.activationLink && (
+                <p className="break-all text-xs">Activation link: {activationFollowUp.activationLink}</p>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                leftIcon={<RefreshCw size={14} />}
+                isLoading={isResendingActivation}
+                onClick={resendActivation}
+              >
+                Resend Activation
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => navigate(`/admin/employees/${activationFollowUp.employeeId}`)}
+              >
+                Open Employee
+              </Button>
+            </div>
+          </div>
         </FeedbackMessage>
       )}
 

@@ -11,7 +11,9 @@
     "db:migrate": "node scripts/migrate.js",
     "admin:create": "node scripts/create-admin.js",
     "seed:demo-account": "node scripts/seed-demo-employee-account.js",
-    "seed:demo-employee": "node scripts/run-sql-file.js src/db/seed-demo-employee-attendance.sql"
+    "seed:demo-employee": "node scripts/run-sql-file.js src/db/seed-demo-employee-attendance.sql",
+    "test": "npm run test:add-employee",
+    "test:add-employee": "node --test -r ts-node/register/transpile-only tests/employeeController.addEmployee.test.ts"
   },
   "dependencies": {
     "@types/bcryptjs": "^2.4.6",
@@ -35,6 +37,7 @@
     "winston": "^3.13.0"
   },
   "devDependencies": {
+    "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0"
   }
 }

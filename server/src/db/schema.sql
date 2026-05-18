@@ -7,7 +7,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- ─── Enums ───────────────────────────────────────────────────────────────────
 
-CREATE TYPE employment_type AS ENUM ('regular', 'probationary', 'contractual', 'part_time', 'intern');
+CREATE TYPE employment_type AS ENUM ('regular', 'probationary', 'contractual', 'part_time');
 CREATE TYPE employment_status AS ENUM ('active', 'inactive', 'terminated', 'resigned');
 CREATE TYPE gender_type AS ENUM ('male', 'female', 'other');
 CREATE TYPE civil_status AS ENUM ('single', 'married', 'widowed', 'separated');
