@@ -12,7 +12,7 @@ CREATE TYPE employment_status AS ENUM ('active', 'inactive', 'terminated', 'resi
 CREATE TYPE gender_type AS ENUM ('male', 'female', 'other');
 CREATE TYPE civil_status AS ENUM ('single', 'married', 'widowed', 'separated');
 CREATE TYPE pay_frequency AS ENUM ('weekly', 'semi-monthly', 'monthly');
-CREATE TYPE payroll_status AS ENUM ('draft', 'processing', 'processed', 'validation_failed', 'ready_for_approval', 'needs_correction', 'approved', 'released', 'locked', 'cancelled');
+CREATE TYPE payroll_status AS ENUM ('draft', 'processing', 'processed', 'validation_failed', 'ready_for_approval', 'needs_correction', 'approved', 'released', 'locked', 'cancelled', 'voided');
 CREATE TYPE attendance_status AS ENUM ('present', 'absent', 'late', 'half_day', 'holiday', 'rest_day', 'on_leave');
 CREATE TYPE leave_request_status AS ENUM ('pending', 'approved', 'rejected', 'cancelled');
 CREATE TYPE user_role AS ENUM ('admin', 'employee', 'payroll_preparer', 'payroll_approver', 'payroll_releaser', 'auditor', 'super_admin');
@@ -251,6 +251,9 @@ CREATE TABLE payroll_records (
   is_locked              BOOLEAN NOT NULL DEFAULT false,
   locked_at              TIMESTAMPTZ,
   locked_by              UUID REFERENCES users(id),
+  voided_by              UUID REFERENCES users(id),
+  voided_at              TIMESTAMPTZ,
+  void_reason            TEXT,
   status                 payroll_status DEFAULT 'draft',
   created_at             TIMESTAMPTZ DEFAULT NOW(),
   updated_at             TIMESTAMPTZ DEFAULT NOW(),
@@ -607,6 +610,7 @@ CREATE INDEX idx_role_permissions_role ON role_permissions(role_name);
 CREATE INDEX idx_payroll_periods_locked ON payroll_periods(is_locked, status);
 CREATE INDEX idx_payroll_periods_action_users ON payroll_periods(processed_by, approved_by, released_by);
 CREATE INDEX idx_payroll_records_locked ON payroll_records(payroll_period_id, is_locked);
+CREATE INDEX idx_payroll_records_voided ON payroll_records(payroll_period_id, status, voided_at);
 CREATE INDEX idx_payroll_snapshots_record ON payroll_calculation_snapshots(payroll_record_id, created_at DESC);
 CREATE INDEX idx_payroll_snapshots_period_employee ON payroll_calculation_snapshots(payroll_period_id, employee_id, created_at DESC);
 CREATE INDEX idx_payroll_snapshots_hash ON payroll_calculation_snapshots(snapshot_hash);
@@ -703,6 +707,7 @@ INSERT INTO role_permissions (role_name, permission_key) VALUES
   ('payroll_preparer', 'payroll:process'),
   ('payroll_preparer', 'payroll:validate'),
   ('payroll_preparer', 'payroll:reprocess'),
+  ('payroll_preparer', 'payroll:void_record'),
   ('payroll_preparer', 'payroll:view'),
   ('payroll_preparer', 'payroll:view_payslips'),
   ('payroll_preparer', 'payroll:view_reports'),
@@ -710,6 +715,7 @@ INSERT INTO role_permissions (role_name, permission_key) VALUES
   ('payroll_approver', 'payroll:validate'),
   ('payroll_approver', 'payroll:approve'),
   ('payroll_approver', 'payroll:request_correction'),
+  ('payroll_approver', 'payroll:void_record'),
   ('payroll_approver', 'payroll:view'),
   ('payroll_approver', 'payroll:view_payslips'),
   ('payroll_approver', 'payroll:view_reports'),

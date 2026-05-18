@@ -19,6 +19,7 @@ import {
   approvePayroll,
   requestPayrollCorrection,
   releasePayroll,
+  voidPayrollRecord,
   unlockPayroll,
   getPayrollAuditLogs,
   getPayrollRecordSnapshots,
@@ -57,6 +58,7 @@ router.get('/records/:id/breakdown', requirePayrollPermission('payroll:view'), g
 router.get('/records/:id/snapshots', requirePayrollPermission('payroll:view_audit_logs'), getPayrollRecordSnapshots)
 router.get('/records/:id/payslip', requirePayrollPermission('payroll:view_payslips'), getPayrollRecordPayslip)
 router.get('/records/:id/payslip/pdf', requirePayrollPermission('payroll:view_payslips'), downloadPayslip)
+router.post('/records/:id/void', requirePayrollPermission('payroll:void_record'), voidPayrollRecord)
 router.post('/process', requirePayrollPermission('payroll:process'), processPayroll)
 router.post('/periods/:id/process', requirePayrollPermission('payroll:process'), processPayroll)
 router.post('/periods/:id/reprocess', requirePayrollPermission('payroll:reprocess'), processPayroll)

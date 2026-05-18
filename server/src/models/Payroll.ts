@@ -12,6 +12,7 @@ export type PayrollStatus =
   | 'released'
   | 'locked'
   | 'cancelled'
+  | 'voided'
 
 export interface PayrollPeriodRow {
   id: string
@@ -71,6 +72,9 @@ export interface PayrollRecordRow {
   pag_ibig_employer: number
   net_pay: number
   status: PayrollStatus
+  voided_by?: string
+  voided_at?: Date
+  void_reason?: string
   created_at: Date
   updated_at: Date
 }
@@ -108,14 +112,14 @@ export class PayrollPeriodModel {
          ),
          summaries AS (
            SELECT payroll_period_id,
-                  COUNT(*)::int AS record_count,
+                  COUNT(*) FILTER (WHERE status::text NOT IN ('cancelled', 'voided'))::int AS record_count,
                   COUNT(*) FILTER (WHERE status IN ('processing', 'processed', 'validation_failed', 'ready_for_approval', 'needs_correction'))::int AS processing_record_count,
                   COUNT(*) FILTER (WHERE status = 'approved')::int AS approved_record_count,
                   COUNT(*) FILTER (WHERE status IN ('released', 'locked'))::int AS released_record_count,
-                  COALESCE(SUM(gross_pay), 0) AS total_gross_pay,
-                  COALESCE(SUM(total_deductions), 0) AS total_deductions,
-                  COALESCE(SUM(net_pay), 0) AS total_net_pay,
-                  COUNT(*) FILTER (WHERE net_pay < 0)::int AS negative_net_count
+                  COALESCE(SUM(gross_pay) FILTER (WHERE status::text NOT IN ('cancelled', 'voided')), 0) AS total_gross_pay,
+                  COALESCE(SUM(total_deductions) FILTER (WHERE status::text NOT IN ('cancelled', 'voided')), 0) AS total_deductions,
+                  COALESCE(SUM(net_pay) FILTER (WHERE status::text NOT IN ('cancelled', 'voided')), 0) AS total_net_pay,
+                  COUNT(*) FILTER (WHERE status::text NOT IN ('cancelled', 'voided') AND net_pay < 0)::int AS negative_net_count
            FROM payroll_records
            GROUP BY payroll_period_id
          )
@@ -154,14 +158,14 @@ export class PayrollPeriodModel {
        ),
        summaries AS (
          SELECT payroll_period_id,
-                COUNT(*)::int AS record_count,
+                COUNT(*) FILTER (WHERE status::text NOT IN ('cancelled', 'voided'))::int AS record_count,
                 COUNT(*) FILTER (WHERE status IN ('processing', 'processed', 'validation_failed', 'ready_for_approval', 'needs_correction'))::int AS processing_record_count,
                 COUNT(*) FILTER (WHERE status = 'approved')::int AS approved_record_count,
                 COUNT(*) FILTER (WHERE status IN ('released', 'locked'))::int AS released_record_count,
-                COALESCE(SUM(gross_pay), 0) AS total_gross_pay,
-                COALESCE(SUM(total_deductions), 0) AS total_deductions,
-                COALESCE(SUM(net_pay), 0) AS total_net_pay,
-                COUNT(*) FILTER (WHERE net_pay < 0)::int AS negative_net_count
+                COALESCE(SUM(gross_pay) FILTER (WHERE status::text NOT IN ('cancelled', 'voided')), 0) AS total_gross_pay,
+                COALESCE(SUM(total_deductions) FILTER (WHERE status::text NOT IN ('cancelled', 'voided')), 0) AS total_deductions,
+                COALESCE(SUM(net_pay) FILTER (WHERE status::text NOT IN ('cancelled', 'voided')), 0) AS total_net_pay,
+                COUNT(*) FILTER (WHERE status::text NOT IN ('cancelled', 'voided') AND net_pay < 0)::int AS negative_net_count
          FROM payroll_records
          GROUP BY payroll_period_id
        )

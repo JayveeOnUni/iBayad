@@ -21,6 +21,7 @@ export type PayrollPermission =
   | 'payroll:export_reports'
   | 'payroll:view_audit_logs'
   | 'payroll:reprocess'
+  | 'payroll:void_record'
   | 'payroll:unlock'
 
 const payrollPermissionsByRole: Record<string, PayrollPermission[] | '*'> = {
@@ -31,6 +32,7 @@ const payrollPermissionsByRole: Record<string, PayrollPermission[] | '*'> = {
     'payroll:process',
     'payroll:validate',
     'payroll:reprocess',
+    'payroll:void_record',
     'payroll:view',
     'payroll:view_payslips',
     'payroll:view_reports',
@@ -40,6 +42,7 @@ const payrollPermissionsByRole: Record<string, PayrollPermission[] | '*'> = {
     'payroll:validate',
     'payroll:approve',
     'payroll:request_correction',
+    'payroll:void_record',
     'payroll:view',
     'payroll:view_payslips',
     'payroll:view_reports',

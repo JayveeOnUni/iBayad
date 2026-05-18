@@ -93,6 +93,10 @@ export const payrollService = {
   getRecordBreakdown: (id: string) =>
     api.get<ApiResponse<RawRow>>(`/payroll/records/${id}/breakdown`),
 
+  voidRecord: (id: string, reason: string) =>
+    api.post<ApiResponse<RawRow>>(`/payroll/records/${id}/void`, { reason })
+      .then((res) => ({ ...res, data: mapPayrollRecord(res.data) })),
+
   listStatutoryRules: () =>
     api.get<ApiResponse<RawRow[]>>('/payroll/statutory-rules'),
 

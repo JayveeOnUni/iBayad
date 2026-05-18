@@ -285,13 +285,18 @@ export function mapPayrollPeriod(row: Row): PayrollPeriod {
     approvedBy: row.approved_by ? str(row.approved_by) : undefined,
     releasedBy: row.released_by ? str(row.released_by) : undefined,
     lockedBy: row.locked_by ? str(row.locked_by) : undefined,
+    reprocessedBy: row.reprocessed_by ? str(row.reprocessed_by) : undefined,
+    correctionRequestedBy: row.correction_requested_by ? str(row.correction_requested_by) : undefined,
     processedAt: row.processed_at ? str(row.processed_at) : undefined,
     validatedAt: row.validated_at ? str(row.validated_at) : undefined,
     approvedAt: row.approved_at ? str(row.approved_at) : undefined,
     releasedAt: row.released_at ? str(row.released_at) : undefined,
     lockedAt: row.locked_at ? str(row.locked_at) : undefined,
+    reprocessedAt: row.reprocessed_at ? str(row.reprocessed_at) : undefined,
+    correctionRequestedAt: row.correction_requested_at ? str(row.correction_requested_at) : undefined,
     approvalNotes: row.approval_notes ? str(row.approval_notes) : undefined,
     correctionNotes: row.correction_notes ? str(row.correction_notes) : undefined,
+    reprocessReason: row.reprocess_reason ? str(row.reprocess_reason) : undefined,
     isLocked: Boolean(row.is_locked ?? row.isLocked),
     lockedReason: row.locked_reason ? str(row.locked_reason) : undefined,
     activeEmployeeCount: num(row.active_employee_count ?? row.activeEmployeeCount),
@@ -344,12 +349,26 @@ function mapValidationIssue(row: Row): PayrollValidationIssue {
   }
 }
 
+function withoutLoanDeductions(value: unknown): Record<string, unknown> {
+  const row = { ...((value ?? {}) as Row) }
+  delete row.loanDeductions
+  delete row.loan_deductions
+  return row
+}
+
+function withoutPayrollLoanBreakdown(value: unknown): Record<string, unknown> {
+  const breakdown = withoutLoanDeductions(value)
+  if (breakdown.deductions && typeof breakdown.deductions === 'object') {
+    breakdown.deductions = withoutLoanDeductions(breakdown.deductions)
+  }
+  return breakdown
+}
+
 export function mapPayrollValidationReport(row: Row): PayrollValidationReport {
   const attendance = (row.attendance ?? {}) as Row
   const payroll = (row.payroll ?? {}) as Row
   const leaveAdjustments = (row.leaveAdjustments ?? row.leave_adjustments ?? {}) as Row
   const statutory = (row.statutory ?? {}) as Row
-  const loans = (row.loans ?? {}) as Row
 
   return {
     periodId: str(row.periodId ?? row.period_id),
@@ -413,16 +432,6 @@ export function mapPayrollValidationReport(row: Row): PayrollValidationReport {
           }))
         : [],
     },
-    loans: {
-      duplicateLoanDeductions: num(loans.duplicateLoanDeductions ?? loans.duplicate_loan_deductions),
-      deductionsExceedingBalance: num(loans.deductionsExceedingBalance ?? loans.deductions_exceeding_balance),
-      duplicateDeductions: Array.isArray(loans.duplicateDeductions ?? loans.duplicate_deductions)
-        ? ((loans.duplicateDeductions ?? loans.duplicate_deductions) as Row[]).map(mapValidationEmployeeIssue)
-        : [],
-      exceedingBalance: Array.isArray(loans.exceedingBalance ?? loans.exceeding_balance)
-        ? ((loans.exceedingBalance ?? loans.exceeding_balance) as Row[]).map(mapValidationEmployeeIssue)
-        : [],
-    },
   }
 }
 
@@ -453,7 +462,7 @@ export function mapPayrollCalculationSnapshot(row: Row): PayrollCalculationSnaps
     payrollPeriodEnd: str(row.payroll_period_end ?? row.payrollPeriodEnd),
     attendanceSummary: (row.attendance_summary_json ?? row.attendanceSummary ?? {}) as Record<string, unknown>,
     earningsBreakdown: (row.earnings_breakdown_json ?? row.earningsBreakdown ?? {}) as Record<string, unknown>,
-    deductionsBreakdown: (row.deductions_breakdown_json ?? row.deductionsBreakdown ?? {}) as Record<string, unknown>,
+    deductionsBreakdown: withoutLoanDeductions(row.deductions_breakdown_json ?? row.deductionsBreakdown),
     employerContributions: (row.employer_contributions_json ?? row.employerContributions ?? {}) as Record<string, unknown>,
     taxableIncome: num(row.taxable_income ?? row.taxableIncome),
     nonTaxableEarnings: num(row.non_taxable_earnings ?? row.nonTaxableEarnings),
@@ -527,14 +536,14 @@ export function mapPayrollRecord(row: Row): PayrollRecord {
     preTaxDeductions: num(row.pre_tax_deductions),
     statutoryDeductions: num(row.statutory_deductions),
     postTaxDeductions: num(row.post_tax_deductions),
-    loanDeductions: num(row.loan_deductions),
+    loanDeductions: 0,
     otherDeductions: num(row.other_deductions),
     totalDeductions: num(row.total_deductions),
     netPay: num(row.net_pay),
     employerContributions: num(row.employer_contributions),
     statutoryRuleVersion: row.statutory_rule_version ? str(row.statutory_rule_version) : undefined,
     statutoryRuleVersions: (row.statutory_rule_versions ?? row.statutoryRuleVersions) as Record<string, unknown> | undefined,
-    computationBreakdown: (row.computation_breakdown ?? row.computationBreakdown) as Record<string, unknown> | undefined,
+    computationBreakdown: withoutPayrollLoanBreakdown(row.computation_breakdown ?? row.computationBreakdown),
     daysWorked: num(row.days_worked),
     hoursWorked: num(row.hours_worked),
     overtimeHours: num(row.overtime_hours),
@@ -548,6 +557,9 @@ export function mapPayrollRecord(row: Row): PayrollRecord {
     isLocked: Boolean(row.is_locked ?? row.isLocked),
     lockedAt: row.locked_at ? str(row.locked_at) : undefined,
     lockedBy: row.locked_by ? str(row.locked_by) : undefined,
+    voidedBy: row.voided_by ? str(row.voided_by) : undefined,
+    voidedAt: row.voided_at ? str(row.voided_at) : undefined,
+    voidReason: row.void_reason ? str(row.void_reason) : undefined,
     createdAt: str(row.created_at ?? row.createdAt),
     updatedAt: str(row.updated_at ?? row.updatedAt),
   }

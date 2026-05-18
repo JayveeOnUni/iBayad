@@ -66,12 +66,6 @@ export interface PayrollValidationReport {
     versions: Record<string, unknown>
     missingRules: Array<{ agency: string; ruleName: string }>
   }
-  loans: {
-    duplicateLoanDeductions: number
-    deductionsExceedingBalance: number
-    duplicateDeductions: PayrollValidationEmployeeIssue[]
-    exceedingBalance: PayrollValidationEmployeeIssue[]
-  }
 }
 
 function toNumber(value: unknown): number {
@@ -134,6 +128,13 @@ export async function buildPayrollValidationReport(
        FROM employees
        WHERE employment_status = 'active'
          AND hire_date <= $3::date
+         AND NOT EXISTS (
+           SELECT 1
+           FROM payroll_records excluded_pr
+           WHERE excluded_pr.payroll_period_id = $1
+             AND excluded_pr.employee_id = employees.id
+             AND excluded_pr.status::text IN ('cancelled', 'voided')
+         )
      ),
      expected AS (
        SELECT ae.id AS employee_id, wd.work_date
@@ -166,7 +167,7 @@ export async function buildPayrollValidationReport(
               pre_tax_deductions, statutory_deductions, post_tax_deductions
        FROM payroll_records
        WHERE payroll_period_id = $1
-         AND status <> 'cancelled'
+         AND status::text NOT IN ('cancelled', 'voided')
      ),
      missing_payroll AS (
        SELECT ae.id AS employee_id,
@@ -311,41 +312,6 @@ export async function buildPayrollValidationReport(
     db
   )
 
-  const loanIssuesResult = await db.query(
-    `WITH duplicate_loan_deductions AS (
-       SELECT pld.employee_id,
-              e.employee_number,
-              CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
-              COUNT(*)::int AS count,
-              SUM(pld.deducted_amount) AS amount
-       FROM payroll_loan_deductions pld
-       JOIN employees e ON e.id = pld.employee_id
-       WHERE pld.payroll_period_id = $1
-       GROUP BY pld.employee_id, e.employee_number, e.first_name, e.last_name, pld.loan_id
-       HAVING COUNT(*) > 1
-     ),
-     exceeding_balance AS (
-       SELECT pld.employee_id,
-              e.employee_number,
-              CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
-              pld.deducted_amount AS amount
-       FROM payroll_loan_deductions pld
-       JOIN employees e ON e.id = pld.employee_id
-       WHERE pld.payroll_period_id = $1
-         AND (
-           pld.deducted_amount > pld.remaining_balance_before
-           OR pld.remaining_balance_after < 0
-         )
-     )
-     SELECT
-       (SELECT COUNT(*) FROM duplicate_loan_deductions)::int AS duplicate_loan_deductions,
-       (SELECT COUNT(*) FROM exceeding_balance)::int AS deductions_exceeding_balance,
-       COALESCE((SELECT JSON_AGG(duplicate_loan_deductions ORDER BY employee_name) FROM duplicate_loan_deductions), '[]'::json) AS duplicate_deductions,
-       COALESCE((SELECT JSON_AGG(exceeding_balance ORDER BY employee_name) FROM exceeding_balance), '[]'::json) AS exceeding_balance`,
-    [payrollPeriodId]
-  )
-  const loanIssues = loanIssuesResult.rows[0] as Record<string, unknown>
-
   const totalEmployees = toInt(row.total_employees)
   const employeesWithMissingAttendance = toInt(row.employees_with_missing_attendance)
   const missingEmployeeDays = toInt(row.missing_employee_days)
@@ -357,8 +323,6 @@ export async function buildPayrollValidationReport(
   const employeesWithInvalidTaxableIncome = toInt(row.employees_with_invalid_taxable_income)
   const pendingCorrections = toInt(pendingAttendanceResult.rows[0]?.count)
   const pendingLeaveRequests = toInt(pendingLeaveResult.rows[0]?.count)
-  const duplicateLoanDeductions = toInt(loanIssues.duplicate_loan_deductions)
-  const deductionsExceedingBalance = toInt(loanIssues.deductions_exceeding_balance)
 
   const issues: PayrollValidationIssue[] = []
   if (totalEmployees === 0) {
@@ -459,23 +423,6 @@ export async function buildPayrollValidationReport(
       message: `${employeesWithInvalidTaxableIncome} payroll record${employeesWithInvalidTaxableIncome === 1 ? ' has' : 's have'} missing or invalid taxable income.`,
     })
   }
-  if (duplicateLoanDeductions > 0) {
-    issues.push({
-      code: 'duplicate_loan_deduction',
-      severity: 'critical',
-      count: duplicateLoanDeductions,
-      message: `${duplicateLoanDeductions} duplicate loan deduction${duplicateLoanDeductions === 1 ? '' : 's'} exist for this payroll period.`,
-    })
-  }
-  if (deductionsExceedingBalance > 0) {
-    issues.push({
-      code: 'loan_deduction_exceeds_balance',
-      severity: 'critical',
-      count: deductionsExceedingBalance,
-      message: `${deductionsExceedingBalance} loan deduction${deductionsExceedingBalance === 1 ? '' : 's'} exceed remaining loan balance.`,
-    })
-  }
-
   const criticalIssueCount = issues.filter((issue) => issue.severity === 'critical').length
   const warningCount = issues.filter((issue) => issue.severity === 'warning').length
   const isValid = criticalIssueCount === 0
@@ -524,12 +471,6 @@ export async function buildPayrollValidationReport(
       isComplete: statutoryCoverage.isComplete,
       versions: statutoryCoverage.versions,
       missingRules: statutoryCoverage.missing,
-    },
-    loans: {
-      duplicateLoanDeductions,
-      deductionsExceedingBalance,
-      duplicateDeductions: (loanIssues.duplicate_deductions as Record<string, unknown>[]).map(employeeIssue),
-      exceedingBalance: (loanIssues.exceeding_balance as Record<string, unknown>[]).map(employeeIssue),
     },
   }
 }

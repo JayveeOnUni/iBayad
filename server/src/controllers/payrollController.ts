@@ -26,9 +26,10 @@ const payrollStatuses = [
   'released',
   'locked',
   'cancelled',
+  'voided',
 ] as const
 const payFrequencies = ['weekly', 'semi-monthly', 'monthly'] as const
-const payrollReportTypes = ['summary', 'employees', 'government-contributions', 'tax', 'loans', 'attendance'] as const
+const payrollReportTypes = ['summary', 'employees', 'government-contributions', 'tax', 'attendance'] as const
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 type PayrollStatus = typeof payrollStatuses[number]
@@ -239,14 +240,14 @@ async function getPeriodSummary(periodId: string, db: Queryable = pool) {
         FROM employees e
         WHERE e.employment_status = 'active'
           AND e.hire_date <= pp.end_date)::int AS active_employee_count,
-       COUNT(pr.id) FILTER (WHERE pr.status <> 'cancelled')::int AS record_count,
+       COUNT(pr.id) FILTER (WHERE pr.status::text NOT IN ('cancelled', 'voided'))::int AS record_count,
        COUNT(pr.id) FILTER (WHERE pr.status IN ('processing', 'processed', 'validation_failed', 'ready_for_approval', 'needs_correction'))::int AS processing_record_count,
        COUNT(pr.id) FILTER (WHERE pr.status = 'approved')::int AS approved_record_count,
        COUNT(pr.id) FILTER (WHERE pr.status IN ('released', 'locked'))::int AS released_record_count,
-       COALESCE(SUM(pr.gross_pay) FILTER (WHERE pr.status <> 'cancelled'), 0) AS total_gross_pay,
-       COALESCE(SUM(pr.total_deductions) FILTER (WHERE pr.status <> 'cancelled'), 0) AS total_deductions,
-       COALESCE(SUM(pr.net_pay) FILTER (WHERE pr.status <> 'cancelled'), 0) AS total_net_pay,
-       COUNT(pr.id) FILTER (WHERE pr.status <> 'cancelled' AND pr.net_pay < 0)::int AS negative_net_count
+       COALESCE(SUM(pr.gross_pay) FILTER (WHERE pr.status::text NOT IN ('cancelled', 'voided')), 0) AS total_gross_pay,
+       COALESCE(SUM(pr.total_deductions) FILTER (WHERE pr.status::text NOT IN ('cancelled', 'voided')), 0) AS total_deductions,
+       COALESCE(SUM(pr.net_pay) FILTER (WHERE pr.status::text NOT IN ('cancelled', 'voided')), 0) AS total_net_pay,
+       COUNT(pr.id) FILTER (WHERE pr.status::text NOT IN ('cancelled', 'voided') AND pr.net_pay < 0)::int AS negative_net_count
      FROM payroll_periods pp
      LEFT JOIN payroll_records pr ON pr.payroll_period_id = pp.id
      WHERE pp.id = $1
@@ -272,14 +273,14 @@ async function findPeriodRowById(periodId: string, db: Queryable = pool) {
   const result = await db.query(
     `WITH summaries AS (
        SELECT payroll_period_id,
-              COUNT(*) FILTER (WHERE status <> 'cancelled')::int AS record_count,
+              COUNT(*) FILTER (WHERE status::text NOT IN ('cancelled', 'voided'))::int AS record_count,
               COUNT(*) FILTER (WHERE status IN ('processing', 'processed', 'validation_failed', 'ready_for_approval', 'needs_correction'))::int AS processing_record_count,
               COUNT(*) FILTER (WHERE status = 'approved')::int AS approved_record_count,
               COUNT(*) FILTER (WHERE status IN ('released', 'locked'))::int AS released_record_count,
-              COALESCE(SUM(gross_pay) FILTER (WHERE status <> 'cancelled'), 0) AS total_gross_pay,
-              COALESCE(SUM(total_deductions) FILTER (WHERE status <> 'cancelled'), 0) AS total_deductions,
-              COALESCE(SUM(net_pay) FILTER (WHERE status <> 'cancelled'), 0) AS total_net_pay,
-              COUNT(*) FILTER (WHERE status <> 'cancelled' AND net_pay < 0)::int AS negative_net_count
+              COALESCE(SUM(gross_pay) FILTER (WHERE status::text NOT IN ('cancelled', 'voided')), 0) AS total_gross_pay,
+              COALESCE(SUM(total_deductions) FILTER (WHERE status::text NOT IN ('cancelled', 'voided')), 0) AS total_deductions,
+              COALESCE(SUM(net_pay) FILTER (WHERE status::text NOT IN ('cancelled', 'voided')), 0) AS total_net_pay,
+              COUNT(*) FILTER (WHERE status::text NOT IN ('cancelled', 'voided') AND net_pay < 0)::int AS negative_net_count
        FROM payroll_records
        GROUP BY payroll_period_id
      )
@@ -614,14 +615,14 @@ export const getPayrollPeriods = asyncHandler(async (req: Request, res: Response
     pool.query(
       `WITH summaries AS (
          SELECT payroll_period_id,
-                COUNT(*) FILTER (WHERE status <> 'cancelled')::int AS record_count,
+                COUNT(*) FILTER (WHERE status::text NOT IN ('cancelled', 'voided'))::int AS record_count,
                 COUNT(*) FILTER (WHERE status IN ('processing', 'processed', 'validation_failed', 'ready_for_approval', 'needs_correction'))::int AS processing_record_count,
                 COUNT(*) FILTER (WHERE status = 'approved')::int AS approved_record_count,
                 COUNT(*) FILTER (WHERE status IN ('released', 'locked'))::int AS released_record_count,
-                COALESCE(SUM(gross_pay) FILTER (WHERE status <> 'cancelled'), 0) AS total_gross_pay,
-                COALESCE(SUM(total_deductions) FILTER (WHERE status <> 'cancelled'), 0) AS total_deductions,
-                COALESCE(SUM(net_pay) FILTER (WHERE status <> 'cancelled'), 0) AS total_net_pay,
-                COUNT(*) FILTER (WHERE status <> 'cancelled' AND net_pay < 0)::int AS negative_net_count
+                COALESCE(SUM(gross_pay) FILTER (WHERE status::text NOT IN ('cancelled', 'voided')), 0) AS total_gross_pay,
+                COALESCE(SUM(total_deductions) FILTER (WHERE status::text NOT IN ('cancelled', 'voided')), 0) AS total_deductions,
+                COALESCE(SUM(net_pay) FILTER (WHERE status::text NOT IN ('cancelled', 'voided')), 0) AS total_net_pay,
+                COUNT(*) FILTER (WHERE status::text NOT IN ('cancelled', 'voided') AND net_pay < 0)::int AS negative_net_count
          FROM payroll_records
          GROUP BY payroll_period_id
        )
@@ -735,7 +736,7 @@ export const validatePayrollPeriod = asyncHandler(async (req: Request, res: Resp
              updated_at = NOW()
          WHERE payroll_period_id = $2
            AND is_locked = false
-           AND status <> 'cancelled'`,
+           AND status::text NOT IN ('cancelled', 'voided')`,
         [nextStatus, req.params.id]
       )
     }
@@ -934,13 +935,9 @@ export const getPayrollRecordById = asyncHandler(async (req: Request, res: Respo
 export const getPayrollRecordBreakdown = asyncHandler(async (req: Request, res: Response) => {
   assertUuid(req.params.id)
   const result = await pool.query(
-    `SELECT pr.id, pr.employee_id, pr.payroll_period_id, pr.computation_breakdown,
+    `SELECT pr.id, pr.employee_id, pr.payroll_period_id,
+            ((COALESCE(pr.computation_breakdown, '{}'::jsonb) #- '{deductions,loanDeductions}') #- '{loanDeductions}') AS computation_breakdown,
             pr.statutory_rule_versions, pr.statutory_rule_version,
-            COALESCE((
-              SELECT JSON_AGG(pld ORDER BY pld.created_at)
-              FROM payroll_loan_deductions pld
-              WHERE pld.payroll_record_id = pr.id
-            ), '[]'::json) AS loan_deductions,
             COALESCE((
               SELECT JSON_AGG(pla ORDER BY pla.created_at)
               FROM payroll_leave_adjustments pla
@@ -1037,7 +1034,6 @@ export const getPayrollReport = asyncHandler(async (req: Request, res: Response)
     employees: 'payroll_report_viewed',
     'government-contributions': 'government_contribution_report_viewed',
     tax: 'tax_report_viewed',
-    loans: 'loan_deduction_report_viewed',
     attendance: 'attendance_payroll_report_viewed',
   }
   await recordPayrollAudit(pool, {
@@ -1068,7 +1064,6 @@ export const exportPayrollReport = asyncHandler(async (req: Request, res: Respon
     employees: 'payroll_report_exported',
     'government-contributions': 'government_contribution_report_exported',
     tax: 'tax_report_exported',
-    loans: 'loan_deduction_report_exported',
     attendance: 'attendance_payroll_report_exported',
   }
   await recordPayrollAudit(pool, {
@@ -1185,7 +1180,13 @@ export const processPayroll = asyncHandler(async (req: Request, res: Response) =
     if (summaryBefore.activeEmployeeCount === 0) {
       throw createError('No active employees are available for this payroll run', 400)
     }
-    const isReprocess = summaryBefore.recordCount > 0 || period.status !== 'draft'
+    const existingRecords = await client.query(
+      `SELECT COUNT(*)::int AS count
+       FROM payroll_records
+       WHERE payroll_period_id = $1`,
+      [payrollPeriodId]
+    )
+    const isReprocess = toInt(existingRecords.rows[0]?.count) > 0 || period.status !== 'draft'
     if (isReprocess && !actionReason) {
       throw createError('A reprocessing reason is required before recalculating an existing payroll period.', 400)
     }
@@ -1225,7 +1226,7 @@ export const processPayroll = asyncHandler(async (req: Request, res: Response) =
        SET status = 'processed',
            updated_at = NOW()
        WHERE payroll_period_id = $1
-         AND status <> 'cancelled'`,
+         AND status::text NOT IN ('cancelled', 'voided')`,
       [payrollPeriodId]
     )
 
@@ -1318,7 +1319,7 @@ export const approvePayroll = asyncHandler(async (req: Request, res: Response) =
        SET status = 'approved',
            updated_at = NOW()
        WHERE payroll_period_id = $1
-         AND status <> 'cancelled'`,
+         AND status::text NOT IN ('cancelled', 'voided')`,
       [req.params.id]
     )
 
@@ -1393,29 +1394,14 @@ export const releasePayroll = asyncHandler(async (req: Request, res: Response) =
     )
     await client.query(
       `UPDATE payroll_records
-       SET status = 'locked',
+       SET status = CASE WHEN status::text IN ('cancelled', 'voided') THEN status ELSE 'locked' END,
            is_locked = true,
            locked_by = $2,
            locked_at = NOW(),
            updated_at = NOW()
        WHERE payroll_period_id = $1
-         AND status <> 'cancelled'`,
+         AND is_locked = false`,
       [req.params.id, req.user!.userId]
-    )
-    await client.query(
-      `UPDATE loans l
-       SET balance = GREATEST(0, l.balance - deductions.total_deducted),
-           status = CASE WHEN GREATEST(0, l.balance - deductions.total_deducted) <= 0 THEN 'paid'::loan_status ELSE l.status END,
-           is_active = CASE WHEN GREATEST(0, l.balance - deductions.total_deducted) <= 0 THEN false ELSE l.is_active END,
-           updated_at = NOW()
-       FROM (
-         SELECT loan_id, SUM(deducted_amount) AS total_deducted
-         FROM payroll_loan_deductions
-         WHERE payroll_period_id = $1
-         GROUP BY loan_id
-       ) deductions
-       WHERE l.id = deductions.loan_id`,
-      [req.params.id]
     )
 
     await recordPayrollAudit(client, {
@@ -1456,6 +1442,7 @@ export const requestPayrollCorrection = asyncHandler(async (req: Request, res: R
   assertUuid(req.params.id)
   const correctionNotes = requireReason(req.body, ['correctionNotes', 'correction_notes', 'reason'], 'Correction notes')
   const client = await pool.connect()
+  let periodForFailure: Record<string, unknown> | undefined
 
   try {
     await client.query('BEGIN')
@@ -1464,6 +1451,7 @@ export const requestPayrollCorrection = asyncHandler(async (req: Request, res: R
       [req.params.id]
     )
     const period = periodResult.rows[0]
+    periodForFailure = period
     if (!period) throw createError('Payroll period not found', 404)
     if (period.is_locked || ['released', 'locked'].includes(period.status)) {
       throw createError('Released or locked payroll cannot be sent for correction through the normal workflow.', 409)
@@ -1492,7 +1480,7 @@ export const requestPayrollCorrection = asyncHandler(async (req: Request, res: R
            updated_at = NOW()
        WHERE payroll_period_id = $1
          AND is_locked = false
-         AND status <> 'cancelled'`,
+         AND status::text NOT IN ('cancelled', 'voided')`,
       [req.params.id]
     )
 
@@ -1509,6 +1497,125 @@ export const requestPayrollCorrection = asyncHandler(async (req: Request, res: R
     res.json({ success: true, data: updated.rows[0], message: 'Payroll marked for correction.' })
   } catch (err) {
     await client.query('ROLLBACK')
+    await recordPayrollFailure(req, {
+      action: 'payroll_correction_request_failed',
+      periodId: req.params.id,
+      reason: correctionNotes,
+      error: err,
+      oldValues: periodForFailure ? { status: periodForFailure.status } : undefined,
+    })
+    throw err
+  } finally {
+    client.release()
+  }
+})
+
+export const voidPayrollRecord = asyncHandler(async (req: Request, res: Response) => {
+  assertUuid(req.params.id, 'recordId')
+  const voidReason = requireReason(req.body, ['voidReason', 'void_reason', 'reason'], 'Void reason')
+  const client = await pool.connect()
+  let recordForFailure: Record<string, unknown> | undefined
+
+  try {
+    await client.query('BEGIN')
+
+    const recordResult = await client.query(
+      `SELECT pr.*, pp.status AS period_status, pp.is_locked AS period_is_locked
+       FROM payroll_records pr
+       JOIN payroll_periods pp ON pp.id = pr.payroll_period_id
+       WHERE pr.id = $1
+       FOR UPDATE OF pr, pp`,
+      [req.params.id]
+    )
+    const record = recordResult.rows[0]
+    recordForFailure = record
+    if (!record) throw createError('Payroll record not found', 404)
+    if (record.is_locked || record.period_is_locked || ['released', 'locked'].includes(record.status) || ['released', 'locked'].includes(record.period_status)) {
+      throw createError('Released or locked payroll records cannot be voided.', 409)
+    }
+    if (['cancelled', 'voided'].includes(record.status)) {
+      throw createError(`Payroll record is already ${record.status}.`, 409)
+    }
+
+    const shouldRequestCorrection = ['ready_for_approval', 'approved'].includes(record.period_status)
+    const periodStatus = shouldRequestCorrection ? 'needs_correction' : record.period_status
+    const updatedRecord = await client.query(
+      `UPDATE payroll_records
+       SET status = 'voided',
+           voided_by = $2,
+           voided_at = NOW(),
+           void_reason = $3,
+           updated_at = NOW()
+       WHERE id = $1
+         AND is_locked = false
+       RETURNING *`,
+      [req.params.id, req.user!.userId, voidReason]
+    )
+    if (!updatedRecord.rows[0]) throw createError('Locked payroll records cannot be voided.', 409)
+
+    await client.query(
+      `UPDATE payroll_periods
+       SET status = $2,
+           approved_by = CASE WHEN $3 THEN NULL ELSE approved_by END,
+           approved_at = CASE WHEN $3 THEN NULL ELSE approved_at END,
+           approval_notes = CASE WHEN $3 THEN NULL ELSE approval_notes END,
+           correction_notes = CASE WHEN $3 THEN $4 ELSE correction_notes END,
+           correction_requested_by = CASE WHEN $3 THEN $5 ELSE correction_requested_by END,
+           correction_requested_at = CASE WHEN $3 THEN NOW() ELSE correction_requested_at END,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [record.payroll_period_id, periodStatus, shouldRequestCorrection, voidReason, req.user!.userId]
+    )
+
+    if (shouldRequestCorrection) {
+      await client.query(
+        `UPDATE payroll_records
+         SET status = 'needs_correction',
+             updated_at = NOW()
+         WHERE payroll_period_id = $1
+           AND id <> $2
+           AND is_locked = false
+           AND status::text NOT IN ('cancelled', 'voided')`,
+        [record.payroll_period_id, req.params.id]
+      )
+    }
+
+    await recordPayrollAudit(client, {
+      ...auditContext(req),
+      action: 'payroll_record_voided',
+      periodId: String(record.payroll_period_id),
+      recordId: req.params.id,
+      employeeId: String(record.employee_id),
+      entityType: 'payroll_record',
+      entityId: req.params.id,
+      oldValues: {
+        status: record.status,
+        grossPay: record.gross_pay,
+        totalDeductions: record.total_deductions,
+        netPay: record.net_pay,
+        periodStatus: record.period_status,
+      },
+      newValues: {
+        status: 'voided',
+        periodStatus,
+        approvalCleared: shouldRequestCorrection,
+      },
+      reason: voidReason,
+    })
+
+    await client.query('COMMIT')
+    res.json({ success: true, data: updatedRecord.rows[0], message: 'Payroll record voided.' })
+  } catch (err) {
+    await client.query('ROLLBACK')
+    if (recordForFailure) {
+      await recordPayrollFailure(req, {
+        action: 'payroll_record_void_failed',
+        periodId: String(recordForFailure.payroll_period_id),
+        reason: voidReason,
+        error: err,
+        oldValues: { status: recordForFailure.status, periodStatus: recordForFailure.period_status },
+      })
+    }
     throw err
   } finally {
     client.release()

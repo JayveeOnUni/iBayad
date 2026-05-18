@@ -87,6 +87,10 @@ const migrations = [
     name: '020_remove_intern_employment_type',
     file: 'src/db/remove-intern-employment-type.sql',
   },
+  {
+    name: '021_payroll_void_record_controls',
+    file: 'src/db/add-payroll-void-record-controls.sql',
+  },
 ]
 
 function resolveSqlFile(relativeFile) {

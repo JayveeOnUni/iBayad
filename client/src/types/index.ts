@@ -365,6 +365,7 @@ export type PayrollStatus =
   | 'released'
   | 'locked'
   | 'cancelled'
+  | 'voided'
 
 export interface PayrollWarning {
   code: string
@@ -432,12 +433,6 @@ export interface PayrollValidationReport {
     versions: Record<string, unknown>
     missingRules: Array<{ agency: string; ruleName: string }>
   }
-  loans: {
-    duplicateLoanDeductions: number
-    deductionsExceedingBalance: number
-    duplicateDeductions: PayrollValidationEmployeeIssue[]
-    exceedingBalance: PayrollValidationEmployeeIssue[]
-  }
 }
 
 export interface PayrollAuditEntry {
@@ -494,12 +489,17 @@ export interface PayrollPeriod {
   validatedBy?: string
   releasedBy?: string
   lockedBy?: string
+  reprocessedBy?: string
+  correctionRequestedBy?: string
   processedAt?: string
   validatedAt?: string
   releasedAt?: string
   lockedAt?: string
+  reprocessedAt?: string
+  correctionRequestedAt?: string
   approvalNotes?: string
   correctionNotes?: string
+  reprocessReason?: string
   isLocked?: boolean
   lockedReason?: string
   activeEmployeeCount?: number
@@ -597,6 +597,9 @@ export interface PayrollRecord {
   isLocked?: boolean
   lockedAt?: string
   lockedBy?: string
+  voidedBy?: string
+  voidedAt?: string
+  voidReason?: string
   createdAt: string
   updatedAt: string
 }
@@ -606,7 +609,6 @@ export type PayrollReportType =
   | 'employees'
   | 'government-contributions'
   | 'tax'
-  | 'loans'
   | 'attendance'
 
 export interface PayrollReport {
@@ -650,7 +652,6 @@ export interface PayslipDetail {
   employerContributions: Record<string, number>
   summary: Record<string, number | string>
   metadata: Record<string, unknown>
-  loanDeductions: Array<Record<string, unknown>>
   leaveAdjustments: Array<Record<string, unknown>>
 }
 

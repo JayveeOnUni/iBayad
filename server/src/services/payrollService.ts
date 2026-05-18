@@ -148,16 +148,6 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(value)
 }
 
-function allocationFactorForFrequency(
-  payFrequency: PayFrequency,
-  expectedWorkDays: number,
-  workDaysPerMonth: number
-): number {
-  if (payFrequency === 'monthly') return 1
-  if (payFrequency === 'semi-monthly') return 0.5
-  return Math.min(1, Math.max(0, expectedWorkDays / Math.max(1, workDaysPerMonth)))
-}
-
 export async function computePayroll(input: PayrollInput, db: Queryable = pool): Promise<PayrollResult> {
   const policy = input.regularHolidayRate === undefined || input.nightDifferentialEnabled === undefined
     ? await getPayrollPolicySettings()
@@ -221,7 +211,9 @@ export async function computePayroll(input: PayrollInput, db: Queryable = pool):
     statutory.pagIBIG.employee +
     statutory.withholdingTax
   )
-  const postTaxDeductions = round2(input.loanDeductions + input.otherDeductions)
+  const loanDeductions = 0
+  const loanDeductionItems: PayrollLoanDeductionDraft[] = []
+  const postTaxDeductions = round2(loanDeductions + input.otherDeductions)
   const employerContributions = round2(
     statutory.sss.employer +
     statutory.philHealth.employer +
@@ -261,7 +253,7 @@ export async function computePayroll(input: PayrollInput, db: Queryable = pool):
       undertimeDeduction,
       unpaidLeaveDeduction: leaveDeduction,
       preTaxDeductions,
-      loanDeductions: input.loanDeductions,
+      loanDeductions,
       otherDeductions: input.otherDeductions,
       statutoryDeductions,
       totalDeductions: round2(totalDeductions),
@@ -281,7 +273,7 @@ export async function computePayroll(input: PayrollInput, db: Queryable = pool):
     },
     leaveAdjustments: input.leaveAdjustmentItems ?? [],
     leaveAdjustmentIds: input.leaveAdjustmentIds ?? [],
-    loanDeductions: input.loanDeductionItems ?? [],
+    loanDeductions: loanDeductionItems,
     statutoryRuleVersions: statutory.ruleVersions,
     netPay,
   }
@@ -324,7 +316,7 @@ export async function computePayroll(input: PayrollInput, db: Queryable = pool):
     postTaxDeductions,
     taxableIncome: statutory.taxableIncome,
     withholdingTax: statutory.withholdingTax,
-    loanDeductions: input.loanDeductions,
+    loanDeductions,
     otherDeductions: input.otherDeductions,
     totalDeductions,
     sssEmployer: statutory.sss.employer,
@@ -336,7 +328,7 @@ export async function computePayroll(input: PayrollInput, db: Queryable = pool):
     statutoryRuleVersions: statutory.ruleVersions,
     computationBreakdown,
     leaveAdjustmentIds: input.leaveAdjustmentIds ?? [],
-    loanDeductionItems: input.loanDeductionItems ?? [],
+    loanDeductionItems,
   }
 }
 
@@ -408,6 +400,7 @@ export async function savePayrollRecord(record: PayrollResult, db: Queryable = p
       computation_breakdown = EXCLUDED.computation_breakdown,
       updated_at = NOW()
     WHERE payroll_records.is_locked = false
+      AND payroll_records.status::text NOT IN ('cancelled', 'voided')
     RETURNING id`,
     [
       record.employeeId, record.payrollPeriodId,
@@ -626,100 +619,6 @@ async function getLeavePayrollImpact(
   }
 }
 
-async function buildLoanDeductions(
-  db: Queryable,
-  params: {
-    employeeId: string
-    payrollPeriodId: string
-    payFrequency: PayFrequency
-    periodStart: Date | string
-    periodEnd: Date | string
-    deductionDate: Date | string
-    expectedWorkDays: number
-    workDaysPerMonth: number
-  }
-): Promise<PayrollLoanDeductionDraft[]> {
-  const factor = allocationFactorForFrequency(
-    params.payFrequency,
-    params.expectedWorkDays,
-    params.workDaysPerMonth
-  )
-  const result = await db.query(
-    `SELECT l.id, l.monthly_payment, l.balance, l.start_date, l.end_date,
-            COALESCE((
-              SELECT SUM(pld.deducted_amount)
-              FROM payroll_loan_deductions pld
-              WHERE pld.loan_id = l.id
-                AND pld.payroll_period_id <> $2
-            ), 0) AS previous_deductions
-     FROM loans l
-     WHERE l.employee_id = $1
-       AND l.is_active = true
-       AND l.status = 'active'
-       AND l.start_date <= $4::date
-       AND (l.end_date IS NULL OR l.end_date >= $3::date)
-       AND COALESCE(l.balance, 0) > 0
-     ORDER BY l.start_date, l.created_at`,
-    [params.employeeId, params.payrollPeriodId, dateOnly(params.periodStart), dateOnly(params.periodEnd)]
-  )
-
-  return result.rows.flatMap((loan) => {
-    const scheduledAmount = round2(toNumber(loan.monthly_payment) * factor)
-    const remainingBefore = round2(Math.max(0, toNumber(loan.balance)))
-    const deductedAmount = round2(Math.min(scheduledAmount, remainingBefore))
-    if (deductedAmount <= 0) return []
-
-    return [{
-      employeeId: params.employeeId,
-      loanId: loan.id,
-      payrollPeriodId: params.payrollPeriodId,
-      scheduledAmount,
-      deductedAmount,
-      remainingBalanceBefore: remainingBefore,
-      remainingBalanceAfter: round2(remainingBefore - deductedAmount),
-      deductionDate: dateOnly(params.deductionDate),
-    }]
-  })
-}
-
-async function savePayrollLoanDeductions(
-  db: Queryable,
-  payrollRecordId: string,
-  items: PayrollLoanDeductionDraft[]
-): Promise<void> {
-  await db.query(`DELETE FROM payroll_loan_deductions WHERE payroll_record_id = $1`, [payrollRecordId])
-
-  for (const item of items) {
-    await db.query(
-      `INSERT INTO payroll_loan_deductions (
-         payroll_record_id, employee_id, loan_id, payroll_period_id,
-         scheduled_amount, deducted_amount, remaining_balance_before,
-         remaining_balance_after, deduction_date
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-       ON CONFLICT (loan_id, payroll_period_id)
-       DO UPDATE SET
-         payroll_record_id = EXCLUDED.payroll_record_id,
-         scheduled_amount = EXCLUDED.scheduled_amount,
-         deducted_amount = EXCLUDED.deducted_amount,
-         remaining_balance_before = EXCLUDED.remaining_balance_before,
-         remaining_balance_after = EXCLUDED.remaining_balance_after,
-         deduction_date = EXCLUDED.deduction_date,
-         updated_at = NOW()`,
-      [
-        payrollRecordId,
-        item.employeeId,
-        item.loanId,
-        item.payrollPeriodId,
-        item.scheduledAmount,
-        item.deductedAmount,
-        item.remainingBalanceBefore,
-        item.remainingBalanceAfter,
-        item.deductionDate,
-      ]
-    )
-  }
-}
-
 async function markLeaveAdjustmentsApplied(
   db: Queryable,
   params: {
@@ -872,6 +771,13 @@ export async function processBatchPayroll(
        AND a.date >= GREATEST(e.hire_date, pp.start_date)
      WHERE e.employment_status = 'active'
        AND e.hire_date <= pp.end_date
+       AND NOT EXISTS (
+         SELECT 1
+         FROM payroll_records excluded_pr
+         WHERE excluded_pr.payroll_period_id = $1
+           AND excluded_pr.employee_id = e.id
+           AND excluded_pr.status::text IN ('cancelled', 'voided')
+       )
      GROUP BY e.id, e.basic_salary, e.work_days_per_month, e.work_hours_per_day, e.hire_date`,
     [payrollPeriodId]
   )
@@ -893,17 +799,6 @@ export async function processBatchPayroll(
         paidLeaveAttendanceDays: Number(emp.leave_attendance_days),
         dailyRate,
       })
-      const loanDeductionItems = await buildLoanDeductions(db, {
-        employeeId: emp.id,
-        payrollPeriodId,
-        payFrequency,
-        periodStart: employeePeriodStart,
-        periodEnd: periodRow.end_date,
-        deductionDate: periodRow.pay_date ?? periodRow.end_date,
-        expectedWorkDays: employeeExpectedWorkDays,
-        workDaysPerMonth,
-      })
-      const loanDeductions = round2(loanDeductionItems.reduce((sum, item) => sum + item.deductedAmount, 0))
       const unpaidLeaveDays = Math.min(employeeExpectedWorkDays, leaveImpact.unpaidLeaveDays)
       const paidLeaveDays = Math.max(0, leaveImpact.paidLeaveDays)
       const daysWorked = Number(emp.days_worked)
@@ -937,8 +832,8 @@ export async function processBatchPayroll(
         leaveAdjustmentIds: leaveImpact.adjustmentIds,
         leaveAdjustmentItems: leaveImpact.adjustmentItems,
         otherEarnings: 0,
-        loanDeductions,
-        loanDeductionItems,
+        loanDeductions: 0,
+        loanDeductionItems: [],
         otherDeductions: 0,
         workDaysPerMonth,
         workHoursPerDay: emp.work_hours_per_day ?? 8,
@@ -947,7 +842,6 @@ export async function processBatchPayroll(
       }, db)
 
       const payrollRecordId = await savePayrollRecord(result, db)
-      await savePayrollLoanDeductions(db, payrollRecordId, result.loanDeductionItems)
       await markLeaveAdjustmentsApplied(db, {
         payrollRecordId,
         payrollPeriodId,

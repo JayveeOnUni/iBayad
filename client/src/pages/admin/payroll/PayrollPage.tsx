@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
+  Ban,
   CalendarDays,
   CheckCircle,
   DollarSign,
@@ -68,6 +69,7 @@ const statusVariant: Record<PayrollStatus, 'success' | 'info' | 'neutral' | 'war
   needs_correction: 'warning',
   draft: 'neutral',
   cancelled: 'danger',
+  voided: 'danger',
 }
 
 const messageVariant: Record<PageMessage['variant'], 'success' | 'info' | 'warning' | 'danger'> = {
@@ -87,8 +89,8 @@ const actionPhrase: Record<PayrollAction, string> = {
 const payrollPermissionsByRole: Record<string, string[] | '*'> = {
   admin: '*',
   super_admin: '*',
-  payroll_preparer: ['create_period', 'process', 'validate', 'reprocess', 'view', 'view_payslips', 'view_reports', 'export_reports'],
-  payroll_approver: ['validate', 'approve', 'request_correction', 'view', 'view_payslips', 'view_reports', 'export_reports'],
+  payroll_preparer: ['create_period', 'process', 'validate', 'reprocess', 'void_record', 'view', 'view_payslips', 'view_reports', 'export_reports'],
+  payroll_approver: ['validate', 'approve', 'request_correction', 'void_record', 'view', 'view_payslips', 'view_reports', 'export_reports'],
   payroll_releaser: ['release', 'view', 'view_payslips', 'view_reports'],
   auditor: ['view', 'view_payslips', 'view_reports', 'export_reports', 'view_audit_logs'],
 }
@@ -190,7 +192,6 @@ const reportTypes: Array<{ type: PayrollReportType; label: string }> = [
   { type: 'employees', label: 'Employee Payroll' },
   { type: 'government-contributions', label: 'Government' },
   { type: 'tax', label: 'Tax' },
-  { type: 'loans', label: 'Loans' },
   { type: 'attendance', label: 'Attendance' },
 ]
 
@@ -239,6 +240,11 @@ export default function PayrollPage() {
     record: PayrollRecord
     snapshots: PayrollCalculationSnapshot[]
   } | null>(null)
+  const [voidRecordConfirm, setVoidRecordConfirm] = useState<{
+    record: PayrollRecord
+    confirmation: string
+    reason: string
+  } | null>(null)
   const [reportType, setReportType] = useState<PayrollReportType>('summary')
   const [report, setReport] = useState<PayrollReport | null>(null)
   const [reportFilters, setReportFilters] = useState<{ status: 'all' | PayrollStatus; search: string }>({
@@ -255,6 +261,7 @@ export default function PayrollPage() {
   const canViewAudit = hasPayrollPermission(currentUser?.role, 'view_audit_logs')
   const canViewReports = hasPayrollPermission(currentUser?.role, 'view_reports')
   const canExportReports = hasPayrollPermission(currentUser?.role, 'export_reports')
+  const canVoidRecord = hasPayrollPermission(currentUser?.role, 'void_record')
 
   const loadPeriods = useCallback(async (options?: { preserveMessage?: boolean; rethrow?: boolean }) => {
     try {
@@ -351,6 +358,11 @@ export default function PayrollPage() {
     confirmAction &&
     confirmAction.confirmation.trim() === actionPhrase[confirmAction.action] &&
     (!needsActionNotes || confirmAction.notes.trim().length > 0)
+  )
+  const canConfirmVoidRecord = Boolean(
+    voidRecordConfirm &&
+    voidRecordConfirm.confirmation.trim() === 'VOID' &&
+    voidRecordConfirm.reason.trim().length > 0
   )
 
   const openPeriod = (period: PayrollPeriod) => {
@@ -484,6 +496,24 @@ export default function PayrollPage() {
       setSnapshotModal({ record, snapshots: res.data })
     } catch (err) {
       setMessage({ variant: 'error', text: err instanceof Error ? err.message : 'Unable to load calculation snapshots.' })
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const runVoidRecord = async () => {
+    if (!voidRecordConfirm || !selectedPeriod) return
+    const { record, reason } = voidRecordConfirm
+    try {
+      setActionLoading(`void:${record.id}`)
+      setMessage(null)
+      const res = await payrollService.voidRecord(record.id, reason.trim())
+      setVoidRecordConfirm(null)
+      await loadPeriods({ preserveMessage: true })
+      await loadPeriodDetails(selectedPeriod.id, { preserveMessage: true })
+      setMessage({ variant: 'success', text: res.message ?? 'Payroll record voided.' })
+    } catch (err) {
+      setMessage({ variant: 'error', text: err instanceof Error ? err.message : 'Unable to void payroll record.' })
     } finally {
       setActionLoading(null)
     }
@@ -871,6 +901,7 @@ export default function PayrollPage() {
                     ['Created', selectedPeriod.createdAt],
                     ['Processed', selectedPeriod.processedAt],
                     ['Validated', selectedPeriod.validatedAt],
+                    ['Reprocessed', selectedPeriod.reprocessedAt],
                     ['Approved', selectedPeriod.approvedAt],
                     ['Released', selectedPeriod.releasedAt],
                     ['Locked', selectedPeriod.lockedAt],
@@ -881,10 +912,11 @@ export default function PayrollPage() {
                     </div>
                   ))}
                 </div>
-                {(selectedPeriod.approvalNotes || selectedPeriod.correctionNotes || selectedPeriod.lockedReason) && (
+                {(selectedPeriod.approvalNotes || selectedPeriod.correctionNotes || selectedPeriod.reprocessReason || selectedPeriod.lockedReason) && (
                   <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
                     {selectedPeriod.approvalNotes && <p className="rounded-md border border-border px-3 py-2 text-sm text-muted">Approval: {selectedPeriod.approvalNotes}</p>}
                     {selectedPeriod.correctionNotes && <p className="rounded-md border border-warning-border bg-warning-muted px-3 py-2 text-sm text-ink">Correction: {selectedPeriod.correctionNotes}</p>}
+                    {selectedPeriod.reprocessReason && <p className="rounded-md border border-border px-3 py-2 text-sm text-muted">Reprocess: {selectedPeriod.reprocessReason}</p>}
                     {selectedPeriod.lockedReason && <p className="rounded-md border border-border px-3 py-2 text-sm text-muted">Lock: {selectedPeriod.lockedReason}</p>}
                   </div>
                 )}
@@ -943,12 +975,6 @@ export default function PayrollPage() {
                       <p className="text-xs text-muted">Leave Adjustments</p>
                       <p className="text-sm font-semibold text-ink">
                         {validationReport.leaveAdjustments.unappliedLeaveAdjustments} unapplied
-                      </p>
-                    </div>
-                    <div className="rounded-md border border-border px-3 py-2">
-                      <p className="text-xs text-muted">Loan Issues</p>
-                      <p className="text-sm font-semibold text-danger">
-                        {validationReport.loans.duplicateLoanDeductions + validationReport.loans.deductionsExceedingBalance}
                       </p>
                     </div>
                     <div className="rounded-md border border-border px-3 py-2">
@@ -1139,12 +1165,11 @@ export default function PayrollPage() {
                   ),
                 },
                 {
-                  key: 'leaveLoan',
-                  header: 'Leave / Loans',
+                  key: 'leave',
+                  header: 'Leave',
                   render: (record) => (
                     <div className="text-sm">
                       <p className="text-danger">{formatPeso(record.leaveDeduction)} leave</p>
-                      <p className="text-muted">{formatPeso(record.loanDeductions)} loans</p>
                     </div>
                   ),
                 },
@@ -1187,31 +1212,47 @@ export default function PayrollPage() {
                 {
                   key: 'payslip',
                   header: '',
-                  render: (record) => (
-                    <div className="flex items-center justify-end gap-2">
-                      {canViewAudit && (
+                  render: (record) => {
+                    const periodLocked = selectedPeriod?.isLocked || ['released', 'locked'].includes(selectedPeriod?.status ?? '')
+                    const recordClosed = record.isLocked || ['released', 'locked', 'cancelled', 'voided'].includes(record.status)
+                    const canVoidThisRecord = canVoidRecord && !periodLocked && !recordClosed
+                    return (
+                      <div className="flex items-center justify-end gap-2">
+                        {canViewAudit && (
+                          <Button
+                            size="xs"
+                            variant="ghost"
+                            leftIcon={<History size={12} />}
+                            isLoading={actionLoading === `snapshots:${record.id}`}
+                            onClick={() => viewSnapshots(record)}
+                          >
+                            Snapshots
+                          </Button>
+                        )}
+                        {canVoidRecord && (
+                          <Button
+                            size="xs"
+                            variant="danger"
+                            leftIcon={<Ban size={12} />}
+                            disabled={!canVoidThisRecord || Boolean(actionLoading)}
+                            onClick={() => setVoidRecordConfirm({ record, confirmation: '', reason: '' })}
+                          >
+                            Void
+                          </Button>
+                        )}
                         <Button
                           size="xs"
                           variant="ghost"
-                          leftIcon={<History size={12} />}
-                          isLoading={actionLoading === `snapshots:${record.id}`}
-                          onClick={() => viewSnapshots(record)}
+                          leftIcon={<Download size={12} />}
+                          isLoading={downloadingRecordId === record.id}
+                          disabled={!['released', 'locked'].includes(record.status) || Boolean(downloadingRecordId)}
+                          onClick={() => downloadPayslip(record)}
                         >
-                          Snapshots
+                          Payslip
                         </Button>
-                      )}
-                      <Button
-                        size="xs"
-                        variant="ghost"
-                        leftIcon={<Download size={12} />}
-                        isLoading={downloadingRecordId === record.id}
-                        disabled={!['released', 'locked'].includes(record.status) || Boolean(downloadingRecordId)}
-                        onClick={() => downloadPayslip(record)}
-                      >
-                        Payslip
-                      </Button>
-                    </div>
-                  ),
+                      </div>
+                    )
+                  },
                 },
               ]}
             />
@@ -1316,6 +1357,51 @@ export default function PayrollPage() {
               label={`Type ${actionPhrase[confirmAction.action]} to confirm`}
               value={confirmAction.confirmation}
               onChange={(event) => setConfirmAction((current) => current ? { ...current, confirmation: event.target.value } : current)}
+              autoFocus
+            />
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        isOpen={Boolean(voidRecordConfirm)}
+        onClose={() => {
+          if (!actionLoading) setVoidRecordConfirm(null)
+        }}
+        title="Void payroll record"
+        description={voidRecordConfirm ? employeeName(voidRecordConfirm.record) : ''}
+        size="md"
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setVoidRecordConfirm(null)} disabled={Boolean(actionLoading)}>Cancel</Button>
+            <Button
+              variant="danger"
+              leftIcon={<Ban size={14} />}
+              disabled={!canConfirmVoidRecord}
+              isLoading={Boolean(voidRecordConfirm && actionLoading === `void:${voidRecordConfirm.record.id}`)}
+              onClick={runVoidRecord}
+            >
+              Void Record
+            </Button>
+          </>
+        }
+      >
+        {voidRecordConfirm && (
+          <div className="space-y-4">
+            <FeedbackMessage variant="danger">
+              Voiding keeps the record for audit history but removes it from payroll totals, reports, approvals, and payslip generation.
+            </FeedbackMessage>
+            <Textarea
+              label="Void reason"
+              required
+              value={voidRecordConfirm.reason}
+              onChange={(event) => setVoidRecordConfirm((current) => current ? { ...current, reason: event.target.value } : current)}
+              placeholder="Record the business reason for voiding this payroll record"
+            />
+            <Input
+              label="Type VOID to confirm"
+              value={voidRecordConfirm.confirmation}
+              onChange={(event) => setVoidRecordConfirm((current) => current ? { ...current, confirmation: event.target.value } : current)}
               autoFocus
             />
           </div>

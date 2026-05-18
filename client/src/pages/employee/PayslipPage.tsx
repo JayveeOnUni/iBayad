@@ -33,7 +33,6 @@ const labelMap: Record<string, string> = {
   undertimeDeduction: 'Undertime Deduction',
   absenceDeduction: 'Absence Deduction',
   unpaidLeaveDeduction: 'Unpaid Leave Deduction',
-  loanDeductions: 'Loan Deductions',
   sssEmployee: 'SSS Employee Share',
   philHealthEmployee: 'PhilHealth Employee Share',
   pagIbigEmployee: 'Pag-IBIG Employee Share',
@@ -48,7 +47,7 @@ const labelMap: Record<string, string> = {
 }
 
 function numberRows(values: Record<string, number>, emphasisKey?: string) {
-  return Object.entries(values).map(([key, value]) => (
+  return Object.entries(values).filter(([key]) => key !== 'loanDeductions').map(([key, value]) => (
     <div key={key} className="flex items-center justify-between border-b border-border py-2 text-sm last:border-0">
       <span className={key === emphasisKey ? 'font-semibold text-ink' : 'text-muted'}>{labelMap[key] ?? key}</span>
       <span className={key === emphasisKey ? 'font-semibold text-ink' : 'font-medium text-ink'}>{formatPeso(value)}</span>
@@ -318,4 +317,3 @@ export default function PayslipPage() {
     </div>
   )
 }
-

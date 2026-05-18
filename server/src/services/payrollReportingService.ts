@@ -10,7 +10,6 @@ export type PayrollReportType =
   | 'employees'
   | 'government-contributions'
   | 'tax'
-  | 'loans'
   | 'attendance'
 
 export interface PayrollReportFilters {
@@ -48,7 +47,6 @@ export interface PayslipPayload {
   employerContributions: Record<string, number>
   summary: Record<string, number | string>
   metadata: Record<string, unknown>
-  loanDeductions: Array<Record<string, unknown>>
   leaveAdjustments: Array<Record<string, unknown>>
 }
 
@@ -193,22 +191,6 @@ export async function buildPayslipPayload(
             approver.email AS approved_by_email,
             releaser.email AS released_by_email,
             COALESCE((
-              SELECT JSON_AGG(
-                JSON_BUILD_OBJECT(
-                  'loan_id', pld.loan_id,
-                  'loan_reference', CONCAT(l.loan_type, '-', LEFT(pld.loan_id::text, 8)),
-                  'scheduled_amount', pld.scheduled_amount,
-                  'deducted_amount', pld.deducted_amount,
-                  'remaining_balance_before', pld.remaining_balance_before,
-                  'remaining_balance_after', pld.remaining_balance_after
-                )
-                ORDER BY pld.created_at
-              )
-              FROM payroll_loan_deductions pld
-              LEFT JOIN loans l ON l.id = pld.loan_id
-              WHERE pld.payroll_record_id = pr.id
-            ), '[]'::json) AS loan_items,
-            COALESCE((
               SELECT JSON_AGG(pla ORDER BY pla.created_at)
               FROM payroll_leave_adjustments pla
               WHERE pla.payroll_record_id = pr.id
@@ -253,7 +235,6 @@ export async function buildPayslipPayload(
     undertimeDeduction: toNumber(record.undertime_deduction),
     absenceDeduction: toNumber(record.absence_deduction),
     unpaidLeaveDeduction: toNumber(record.leave_deduction ?? deductionsSnapshot.unpaidLeaveDeduction),
-    loanDeductions: toNumber(record.loan_deductions),
     sssEmployee: toNumber(record.sss_employee),
     philHealthEmployee: toNumber(record.phil_health_employee),
     pagIbigEmployee: toNumber(record.pag_ibig_employee),
@@ -327,7 +308,6 @@ export async function buildPayslipPayload(
       generatedDateTime: new Date().toISOString(),
       isLocked: Boolean(record.is_locked),
     },
-    loanDeductions: Array.isArray(record.loan_items) ? record.loan_items : [],
     leaveAdjustments: Array.isArray(record.leave_adjustments) ? record.leave_adjustments : [],
   }
 }
@@ -376,26 +356,28 @@ export async function buildPayrollReport(
   if (!period) throw createError('Payroll period not found', 404)
 
   const values: unknown[] = [periodId]
-  const conditions = [`pr.payroll_period_id = $1`, ...buildRecordFilters(filters, values)]
+  const conditions = [`pr.payroll_period_id = $1`, `pr.status::text NOT IN ('cancelled', 'voided')`, ...buildRecordFilters(filters, values)]
   const where = `WHERE ${conditions.join(' AND ')}`
+  const summaryWhere = where
+    .replace('pr.payroll_period_id = $1', 'pp.id = $1')
+    .replace("pr.status::text NOT IN ('cancelled', 'voided')", "(pr.id IS NULL OR pr.status::text NOT IN ('cancelled', 'voided'))")
 
   let rows: Array<Record<string, unknown>> = []
   if (reportType === 'summary') {
     const result = await db.query(
       `SELECT pp.id AS payroll_period_id, pp.name AS payroll_period, pp.start_date, pp.end_date, pp.pay_date,
               pp.pay_frequency, pp.status,
-              COUNT(pr.id)::int AS employee_count,
-              COALESCE(SUM(pr.gross_pay), 0) AS total_gross_pay,
-              COALESCE(SUM(pr.total_deductions), 0) AS total_deductions,
-              COALESCE(SUM(pr.net_pay), 0) AS total_net_pay,
-              COALESCE(SUM(pr.employer_contributions), 0) AS total_employer_contributions,
-              COALESCE(SUM(pr.sss_employee + pr.phil_health_employee + pr.pag_ibig_employee), 0) AS total_government_deductions,
-              COALESCE(SUM(pr.loan_deductions), 0) AS total_loan_deductions,
-              COALESCE(SUM(pr.withholding_tax), 0) AS total_withholding_tax
+              COUNT(pr.id) FILTER (WHERE pr.status::text NOT IN ('cancelled', 'voided'))::int AS employee_count,
+              COALESCE(SUM(pr.gross_pay) FILTER (WHERE pr.status::text NOT IN ('cancelled', 'voided')), 0) AS total_gross_pay,
+              COALESCE(SUM(pr.total_deductions) FILTER (WHERE pr.status::text NOT IN ('cancelled', 'voided')), 0) AS total_deductions,
+              COALESCE(SUM(pr.net_pay) FILTER (WHERE pr.status::text NOT IN ('cancelled', 'voided')), 0) AS total_net_pay,
+              COALESCE(SUM(pr.employer_contributions) FILTER (WHERE pr.status::text NOT IN ('cancelled', 'voided')), 0) AS total_employer_contributions,
+              COALESCE(SUM(pr.sss_employee + pr.phil_health_employee + pr.pag_ibig_employee) FILTER (WHERE pr.status::text NOT IN ('cancelled', 'voided')), 0) AS total_government_deductions,
+              COALESCE(SUM(pr.withholding_tax) FILTER (WHERE pr.status::text NOT IN ('cancelled', 'voided')), 0) AS total_withholding_tax
        FROM payroll_periods pp
        LEFT JOIN payroll_records pr ON pr.payroll_period_id = pp.id
        LEFT JOIN employees e ON e.id = pr.employee_id
-       ${where.replace('pr.payroll_period_id = $1', 'pp.id = $1')}
+       ${summaryWhere}
        GROUP BY pp.id`,
       values
     )
@@ -438,22 +420,6 @@ export async function buildPayrollReport(
        JOIN employees e ON e.id = pr.employee_id
        ${where}
        ORDER BY e.last_name, e.first_name`,
-      values
-    )).rows
-  } else if (reportType === 'loans') {
-    rows = (await db.query(
-      `SELECT e.employee_number, CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
-              CONCAT(l.loan_type, '-', LEFT(l.id::text, 8)) AS loan_reference,
-              pld.scheduled_amount, pld.deducted_amount AS actual_deducted_amount,
-              pld.remaining_balance_before, pld.remaining_balance_after,
-              CONCAT(pp.start_date, ' to ', pp.end_date) AS payroll_period
-       FROM payroll_loan_deductions pld
-       JOIN payroll_records pr ON pr.id = pld.payroll_record_id
-       JOIN payroll_periods pp ON pp.id = pr.payroll_period_id
-       JOIN employees e ON e.id = pr.employee_id
-       JOIN loans l ON l.id = pld.loan_id
-       ${where}
-       ORDER BY e.last_name, e.first_name, l.loan_type`,
       values
     )).rows
   } else {
@@ -571,7 +537,6 @@ export async function generatePayslipPdf(payload: PayslipPayload): Promise<Buffe
       ['Undertime deduction', payload.deductions.undertimeDeduction],
       ['Absence deduction', payload.deductions.absenceDeduction],
       ['Unpaid leave deduction', payload.deductions.unpaidLeaveDeduction],
-      ['Loan deductions', payload.deductions.loanDeductions],
       ['SSS employee share', payload.deductions.sssEmployee],
       ['PhilHealth employee share', payload.deductions.philHealthEmployee],
       ['Pag-IBIG employee share', payload.deductions.pagIbigEmployee],

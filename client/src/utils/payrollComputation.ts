@@ -8,7 +8,6 @@ export interface PayrollPreviewBreakdown {
   undertimeDeductions: number
   absenceDeductions: number
   leaveDeductions: number
-  loanDeductions: number
   governmentDeductions: number
   statutoryDeductions: number
   employerContributions: number
@@ -22,7 +21,7 @@ export interface PayrollPreviewBreakdown {
 /**
  * Client payroll computation is intentionally preview-only.
  * It derives display totals from a backend payroll record and never computes
- * final pay from salary, attendance, leave, loan, or statutory formulas.
+ * final pay from salary, attendance, leave, or statutory formulas.
  */
 export function previewPayrollRecord(record: PayrollRecord): PayrollPreviewBreakdown {
   return {
@@ -33,7 +32,6 @@ export function previewPayrollRecord(record: PayrollRecord): PayrollPreviewBreak
     undertimeDeductions: record.undertimeDeduction,
     absenceDeductions: record.absenceDeduction,
     leaveDeductions: record.leaveDeduction,
-    loanDeductions: record.loanDeductions,
     governmentDeductions: record.contributions.totalEmployee,
     statutoryDeductions: record.statutoryDeductions,
     employerContributions: record.employerContributions,
