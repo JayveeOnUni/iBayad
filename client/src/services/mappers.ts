@@ -10,6 +10,8 @@ import type {
   OffsetUsage,
   PayrollPeriod,
   PayrollRecord,
+  ProfileUpdateChange,
+  ProfileUpdateRequest,
   PayrollValidationEmployeeIssue,
   PayrollValidationIssue,
   PayrollValidationReport,
@@ -84,6 +86,31 @@ export function mapEmployee(row: Row): Employee {
     bankAccountNumber: row.bank_account_number ? str(row.bank_account_number) : undefined,
     avatarUrl: row.avatar_url ? str(row.avatar_url) : undefined,
     shiftId: row.shift_id ? str(row.shift_id) : undefined,
+    createdAt: str(row.created_at ?? row.createdAt),
+    updatedAt: str(row.updated_at ?? row.updatedAt),
+  }
+}
+
+export function mapProfileUpdateRequest(row: Row): ProfileUpdateRequest {
+  const changes = (row.requested_changes ?? row.requestedChanges ?? {}) as Record<string, ProfileUpdateChange>
+
+  return {
+    id: str(row.id),
+    employeeId: str(row.employee_id ?? row.employeeId),
+    employee: row.first_name
+      ? {
+          id: str(row.employee_id ?? row.employeeId),
+          firstName: str(row.first_name),
+          lastName: str(row.last_name),
+          employeeNumber: str(row.employee_number),
+        }
+      : undefined,
+    requestedChanges: changes,
+    status: str(row.status, 'pending') as ProfileUpdateRequest['status'],
+    employeeNote: row.employee_note ? str(row.employee_note) : undefined,
+    reviewRemarks: row.review_remarks ? str(row.review_remarks) : undefined,
+    reviewedBy: row.reviewed_by ? str(row.reviewed_by) : undefined,
+    reviewedAt: row.reviewed_at ? str(row.reviewed_at) : undefined,
     createdAt: str(row.created_at ?? row.createdAt),
     updatedAt: str(row.updated_at ?? row.updatedAt),
   }

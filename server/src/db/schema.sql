@@ -21,6 +21,7 @@ CREATE TYPE offset_credit_status AS ENUM ('pending', 'approved', 'rejected', 'ca
 CREATE TYPE offset_credit_source AS ENUM ('excess_hours', 'attendance_correction', 'manual_adjustment');
 CREATE TYPE offset_usage_status AS ENUM ('pending', 'approved', 'rejected', 'cancelled');
 CREATE TYPE offset_usage_source AS ENUM ('employee_request', 'admin_entry', 'manual_adjustment');
+CREATE TYPE profile_update_request_status AS ENUM ('pending', 'approved', 'rejected', 'cancelled');
 
 -- ─── Departments ─────────────────────────────────────────────────────────────
 
@@ -395,6 +396,19 @@ CREATE TABLE attendance_requests (
   updated_at            TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE profile_update_requests (
+  id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id           UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  requested_changes     JSONB NOT NULL CHECK (jsonb_typeof(requested_changes) = 'object'),
+  status                profile_update_request_status NOT NULL DEFAULT 'pending',
+  employee_note         TEXT,
+  review_remarks        TEXT,
+  reviewed_by           UUID REFERENCES users(id),
+  reviewed_at           TIMESTAMPTZ,
+  created_at            TIMESTAMPTZ DEFAULT NOW(),
+  updated_at            TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- ─── Leave Types ─────────────────────────────────────────────────────────────
 
 CREATE TABLE leave_types (
@@ -585,6 +599,8 @@ CREATE INDEX idx_users_password_reset_token_hash ON users(password_reset_token_h
 CREATE UNIQUE INDEX idx_work_shifts_normalized_name_unique ON work_shifts (LOWER(TRIM(name)));
 CREATE INDEX idx_attendance_employee_date ON attendance(employee_id, date);
 CREATE INDEX idx_attendance_date ON attendance(date);
+CREATE INDEX idx_profile_update_requests_employee_created ON profile_update_requests(employee_id, created_at DESC);
+CREATE INDEX idx_profile_update_requests_status_created ON profile_update_requests(status, created_at DESC);
 CREATE INDEX idx_offset_credits_employee_status ON offset_credits(employee_id, status);
 CREATE INDEX idx_offset_credits_attendance ON offset_credits(attendance_id);
 CREATE UNIQUE INDEX idx_offset_credits_attendance_source_unique

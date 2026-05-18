@@ -48,10 +48,11 @@ export function useAuth() {
     try {
       setError(null)
       await authService.changePassword(currentPassword, newPassword)
-      return true
+      return { ok: true }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to change password.')
-      return false
+      const message = err instanceof Error ? err.message : 'Failed to change password.'
+      setError(message)
+      return { ok: false, error: message }
     }
   }
 

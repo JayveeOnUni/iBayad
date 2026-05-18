@@ -16,6 +16,7 @@ import {
   LayoutDashboard,
   Megaphone,
   Settings,
+  User,
   Users,
   X,
 } from 'lucide-react'
@@ -31,6 +32,7 @@ const adminNav: NavItem[] = [
     icon: <Briefcase size={18} />,
     children: [
       { label: 'Employees', to: '/admin/employees', icon: <Users size={15} /> },
+      { label: 'Profile Updates', to: '/admin/profile-update-requests', icon: <User size={15} /> },
       { label: 'Payroll', to: '/admin/payroll', icon: <CreditCard size={15} /> },
     ],
   },

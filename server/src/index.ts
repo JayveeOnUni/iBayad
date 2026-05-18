@@ -11,6 +11,7 @@ import leaveRoutes from './routes/leave'
 import adminLeaveRoutes from './routes/adminLeaves'
 import adminDashboardRoutes from './routes/adminDashboard'
 import adminReferenceDataRoutes from './routes/adminReferenceData'
+import profileUpdateRequestRoutes from './routes/profileUpdateRequests'
 
 // Middleware
 import { asyncHandler, errorHandler } from './middleware/errorHandler'
@@ -93,6 +94,7 @@ app.use('/api/leaves', leaveRoutes)
 app.use('/api/admin/dashboard', adminDashboardRoutes)
 app.use('/api/admin/leaves', adminLeaveRoutes)
 app.use('/api/admin', adminReferenceDataRoutes)
+app.use('/api/profile-update-requests', profileUpdateRequestRoutes)
 
 // Health check
 app.get('/api/health', (_req: Request, res: Response): void => {

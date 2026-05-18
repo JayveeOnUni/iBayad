@@ -1,6 +1,6 @@
 import { api } from './api'
-import type { EmployeeFormData, PaginatedResponse, ApiResponse } from '../types'
-import { mapEmployee } from './mappers'
+import type { EmployeeFormData, PaginatedResponse, ApiResponse, ProfileUpdateRequest } from '../types'
+import { mapEmployee, mapProfileUpdateRequest } from './mappers'
 
 export interface EmployeeListParams {
   page?: number
@@ -9,6 +9,10 @@ export interface EmployeeListParams {
   departmentId?: string
   status?: string
   employmentType?: string
+}
+
+export type ProfileUpdateRequestPayload = Record<string, string | null | undefined> & {
+  employeeNote?: string | null
 }
 
 export const employeeService = {
@@ -23,6 +27,14 @@ export const employeeService = {
   getMe: () =>
     api.get<ApiResponse<Record<string, unknown>>>('/employees/me')
       .then((res) => ({ ...res, data: mapEmployee(res.data) })),
+
+  submitMyProfileUpdateRequest: (data: ProfileUpdateRequestPayload) =>
+    api.post<ApiResponse<Record<string, unknown>>>('/employees/me/profile-update-requests', data)
+      .then((res) => ({ ...res, data: mapProfileUpdateRequest(res.data) })),
+
+  listMyProfileUpdateRequests: () =>
+    api.get<ApiResponse<Record<string, unknown>[]>>('/employees/me/profile-update-requests')
+      .then((res) => ({ ...res, data: res.data.map(mapProfileUpdateRequest) as ProfileUpdateRequest[] })),
 
   create: (data: EmployeeFormData) =>
     api.post<ApiResponse<Record<string, unknown>>>('/employees', data)

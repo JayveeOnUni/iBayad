@@ -91,6 +91,10 @@ const migrations = [
     name: '021_payroll_void_record_controls',
     file: 'src/db/add-payroll-void-record-controls.sql',
   },
+  {
+    name: '022_profile_update_requests',
+    file: 'src/db/add-profile-update-requests.sql',
+  },
 ]
 
 function resolveSqlFile(relativeFile) {

@@ -372,6 +372,9 @@ export const changePassword = asyncHandler(async (req: Request, res: Response) =
   if (!currentPassword || !newPassword) {
     throw createError('Current and new passwords are required', 400)
   }
+  if (String(newPassword).length < 8) {
+    throw createError('Password must be at least 8 characters', 400)
+  }
 
   const result = await pool.query('SELECT * FROM users WHERE id = $1', [req.user!.userId])
   const user = result.rows[0]

@@ -140,6 +140,29 @@ export interface Shift {
   updatedAt: string
 }
 
+export type ProfileUpdateRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled'
+
+export interface ProfileUpdateChange {
+  field: string
+  label: string
+  current: string | null
+  requested: string | null
+}
+
+export interface ProfileUpdateRequest {
+  id: string
+  employeeId: string
+  employee?: Pick<Employee, 'id' | 'firstName' | 'lastName' | 'employeeNumber'>
+  requestedChanges: Record<string, ProfileUpdateChange>
+  status: ProfileUpdateRequestStatus
+  employeeNote?: string
+  reviewRemarks?: string
+  reviewedBy?: string
+  reviewedAt?: string
+  createdAt: string
+  updatedAt: string
+}
+
 // ─── Attendance ───────────────────────────────────────────────────────────────
 
 export type AttendanceStatus = 'present' | 'absent' | 'late' | 'half_day' | 'on_leave' | 'holiday' | 'rest_day'

@@ -10,6 +10,10 @@ import {
 } from '../controllers/employeeController'
 import { getEmployeeDashboard } from '../controllers/employeeDashboardController'
 import {
+  createMyProfileUpdateRequest,
+  getMyProfileUpdateRequests,
+} from '../controllers/profileUpdateRequestController'
+import {
   downloadPayslipPdf,
   getMyPayrollRecords,
   getPayrollRecordPayslip,
@@ -37,6 +41,8 @@ router.get('/me', employeeSelfService, asyncHandler(async (req, res) => {
 }))
 
 router.get('/dashboard', employeeSelfService, getEmployeeDashboard)
+router.get('/me/profile-update-requests', employeeSelfService, getMyProfileUpdateRequests)
+router.post('/me/profile-update-requests', employeeSelfService, createMyProfileUpdateRequest)
 router.get('/me/payslips', employeeSelfService, getMyPayrollRecords)
 router.get('/me/payslips/:id', employeeSelfService, getPayrollRecordPayslip)
 router.get('/me/payslips/:id/pdf', employeeSelfService, downloadPayslipPdf)

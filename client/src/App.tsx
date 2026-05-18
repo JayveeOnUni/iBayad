@@ -13,6 +13,7 @@ import ActivateAccountPage from './pages/auth/ActivateAccountPage'
 import AdminDashboardPage from './pages/admin/DashboardPage'
 import EmployeeListPage from './pages/admin/employees/EmployeeListPage'
 import EmployeeDetailPage from './pages/admin/employees/EmployeeDetailPage'
+import ProfileUpdateRequestsPage from './pages/admin/employees/ProfileUpdateRequestsPage'
 import PayrollPage from './pages/admin/payroll/PayrollPage'
 import DailyLogPage from './pages/admin/attendance/DailyLogPage'
 import AttendanceRequestPage from './pages/admin/attendance/AttendanceRequestPage'
@@ -108,6 +109,7 @@ export default function App() {
 
           <Route path="employees" element={<ProtectedFullAdminRoute><EmployeeListPage /></ProtectedFullAdminRoute>} />
           <Route path="employees/:id" element={<ProtectedFullAdminRoute><EmployeeDetailPage /></ProtectedFullAdminRoute>} />
+          <Route path="profile-update-requests" element={<ProtectedFullAdminRoute><ProfileUpdateRequestsPage /></ProtectedFullAdminRoute>} />
 
           <Route path="payroll" element={<PayrollPage />} />
 
