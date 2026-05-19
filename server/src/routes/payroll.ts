@@ -6,7 +6,9 @@ import {
 import {
   getPayrollPeriods,
   getPayrollPeriodById,
+  getPayrollPeriodGenerationSettings,
   createPayrollPeriod,
+  generatePayrollPeriod,
   getPayrollRecords,
   getPayrollRecordById,
   getPayrollRecordBreakdown,
@@ -43,6 +45,8 @@ router.get('/compute-tax', computeEmployeeTax)
 // Admin/Finance
 router.get('/periods', requirePayrollPermission('payroll:view'), getPayrollPeriods)
 router.post('/periods', requirePayrollPermission('payroll:create_period'), createPayrollPeriod)
+router.get('/periods/generation-settings', requirePayrollPermission('payroll:create_period'), getPayrollPeriodGenerationSettings)
+router.post('/periods/generate', requirePayrollPermission('payroll:create_period'), generatePayrollPeriod)
 router.get('/periods/:id', requirePayrollPermission('payroll:view'), getPayrollPeriodById)
 router.get('/periods/:id/reports/export', requirePayrollPermission('payroll:export_reports'), exportPayrollReport)
 router.get('/periods/:id/reports/:reportType', requirePayrollPermission('payroll:view_reports'), getPayrollReport)

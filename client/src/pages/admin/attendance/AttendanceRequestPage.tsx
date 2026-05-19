@@ -8,6 +8,7 @@ import Avatar from '../../../components/ui/Avatar'
 import { formatDate } from '../../../utils/dateHelpers'
 import type { AttendanceRequest, OffsetCredit, OffsetUsage } from '../../../types'
 import { attendanceService } from '../../../services/attendanceService'
+import { useToast } from '../../../components/ui/Toast'
 
 type Section = 'corrections' | 'credits' | 'usage'
 
@@ -27,6 +28,7 @@ function employeeName(row: AttendanceRequest | OffsetCredit | OffsetUsage) {
 }
 
 export default function AttendanceRequestPage() {
+  const { showToast } = useToast()
   const [section, setSection] = useState<Section>('corrections')
   const [tab, setTab] = useState<'pending' | 'all'>('pending')
   const [requests, setRequests] = useState<AttendanceRequest[]>([])
@@ -77,7 +79,10 @@ export default function AttendanceRequestPage() {
         await attendanceService.rejectRequest(id, 'Rejected by reviewer')
       }
       await loadQueue()
-      setMessage(`Attendance correction ${action === 'approve' ? 'approved' : 'rejected'}.`)
+      showToast({
+        variant: 'success',
+        title: `Attendance correction ${action === 'approve' ? 'approved' : 'rejected'}`,
+      })
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Unable to review correction.')
     }
@@ -92,7 +97,10 @@ export default function AttendanceRequestPage() {
         await attendanceService.rejectOffsetCredit(id, 'Rejected by reviewer')
       }
       await loadQueue()
-      setMessage(`Offset credit ${action === 'approve' ? 'approved' : 'rejected'}.`)
+      showToast({
+        variant: 'success',
+        title: `Offset credit ${action === 'approve' ? 'approved' : 'rejected'}`,
+      })
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Unable to review offset credit.')
     }
@@ -107,7 +115,10 @@ export default function AttendanceRequestPage() {
         await attendanceService.rejectOffsetUsage(id, 'Rejected by reviewer')
       }
       await loadQueue()
-      setMessage(`Offset usage ${action === 'approve' ? 'approved' : 'rejected'}.`)
+      showToast({
+        variant: 'success',
+        title: `Offset usage ${action === 'approve' ? 'approved' : 'rejected'}`,
+      })
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Unable to review offset usage.')
     }

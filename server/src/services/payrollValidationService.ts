@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from 'pg'
 import pool from '../utils/db'
 import { createError } from '../middleware/errorHandler'
 import { validateStatutoryRuleCoverage, type PayFrequency } from '../utils/statutoryDeductions'
+import { payrollComputationEndExpression, payrollEligibleEmployeeCondition } from './payrollEmployeeEligibility'
 
 type Queryable = Pool | PoolClient
 
@@ -117,31 +118,36 @@ export async function buildPayrollValidationReport(
     throw createError('Payroll period not found', 404)
   }
 
+  const eligibilityCondition = payrollEligibleEmployeeCondition('e', 'pp')
+  const computationEndExpression = payrollComputationEndExpression('e', 'pp')
+
   const summaryResult = await db.query(
     `WITH work_dates AS (
        SELECT day::date AS work_date
        FROM generate_series($2::date, $3::date, interval '1 day') AS day
        WHERE EXTRACT(ISODOW FROM day) BETWEEN 1 AND 5
      ),
-     active_employees AS (
-       SELECT id, employee_number, first_name, last_name, hire_date, basic_salary, work_days_per_month, work_hours_per_day
-       FROM employees
-       WHERE employment_status = 'active'
-         AND is_deleted = false
-         AND hire_date <= $3::date
+     eligible_employees AS (
+       SELECT e.id, e.employee_number, e.first_name, e.last_name, e.hire_date, e.basic_salary,
+              e.work_days_per_month, e.work_hours_per_day,
+              ${computationEndExpression} AS payroll_period_end
+       FROM employees e
+       JOIN payroll_periods pp ON pp.id = $1
+       WHERE ${eligibilityCondition}
          AND NOT EXISTS (
            SELECT 1
            FROM payroll_records excluded_pr
            WHERE excluded_pr.payroll_period_id = $1
-             AND excluded_pr.employee_id = employees.id
+             AND excluded_pr.employee_id = e.id
              AND excluded_pr.status::text IN ('cancelled', 'voided')
          )
      ),
      expected AS (
-       SELECT ae.id AS employee_id, wd.work_date
-       FROM active_employees ae
+       SELECT ee.id AS employee_id, wd.work_date
+       FROM eligible_employees ee
        CROSS JOIN work_dates wd
-       WHERE wd.work_date >= GREATEST(ae.hire_date, $2::date)
+       WHERE wd.work_date >= GREATEST(ee.hire_date, $2::date)
+         AND wd.work_date <= ee.payroll_period_end
      ),
      missing_attendance AS (
        SELECT ex.employee_id, ex.work_date
@@ -152,14 +158,14 @@ export async function buildPayrollValidationReport(
        WHERE a.id IS NULL
      ),
      missing_by_employee AS (
-       SELECT ae.id AS employee_id,
-              ae.employee_number,
-              CONCAT(ae.first_name, ' ', ae.last_name) AS employee_name,
+       SELECT ee.id AS employee_id,
+              ee.employee_number,
+              CONCAT(ee.first_name, ' ', ee.last_name) AS employee_name,
               COUNT(ma.work_date)::int AS count,
               ARRAY_AGG(ma.work_date ORDER BY ma.work_date) AS dates
-       FROM active_employees ae
-       JOIN missing_attendance ma ON ma.employee_id = ae.id
-       GROUP BY ae.id, ae.employee_number, ae.first_name, ae.last_name
+       FROM eligible_employees ee
+       JOIN missing_attendance ma ON ma.employee_id = ee.id
+       GROUP BY ee.id, ee.employee_number, ee.first_name, ee.last_name
      ),
      payroll_records_for_period AS (
        SELECT employee_id, net_pay, gross_pay, total_deductions, taxable_income,
@@ -171,21 +177,21 @@ export async function buildPayrollValidationReport(
          AND status::text NOT IN ('cancelled', 'voided')
      ),
      missing_payroll AS (
-       SELECT ae.id AS employee_id,
-              ae.employee_number,
-              CONCAT(ae.first_name, ' ', ae.last_name) AS employee_name
-       FROM active_employees ae
-       LEFT JOIN payroll_records_for_period pr ON pr.employee_id = ae.id
+       SELECT ee.id AS employee_id,
+              ee.employee_number,
+              CONCAT(ee.first_name, ' ', ee.last_name) AS employee_name
+       FROM eligible_employees ee
+       LEFT JOIN payroll_records_for_period pr ON pr.employee_id = ee.id
        WHERE pr.employee_id IS NULL
      ),
      missing_salary AS (
-       SELECT ae.id AS employee_id,
-              ae.employee_number,
-              CONCAT(ae.first_name, ' ', ae.last_name) AS employee_name
-       FROM active_employees ae
-       WHERE COALESCE(ae.basic_salary, 0) <= 0
-          OR COALESCE(ae.work_days_per_month, 0) <= 0
-          OR COALESCE(ae.work_hours_per_day, 0) <= 0
+       SELECT ee.id AS employee_id,
+              ee.employee_number,
+              CONCAT(ee.first_name, ' ', ee.last_name) AS employee_name
+       FROM eligible_employees ee
+       WHERE COALESCE(ee.basic_salary, 0) <= 0
+          OR COALESCE(ee.work_days_per_month, 0) <= 0
+          OR COALESCE(ee.work_hours_per_day, 0) <= 0
      ),
      negative_net AS (
        SELECT e.id AS employee_id,
@@ -242,7 +248,7 @@ export async function buildPayrollValidationReport(
        WHERE pr.taxable_income IS NULL OR pr.taxable_income < 0
      )
      SELECT
-       (SELECT COUNT(*) FROM active_employees)::int AS total_employees,
+       (SELECT COUNT(*) FROM eligible_employees)::int AS total_employees,
        (SELECT COUNT(*) FROM work_dates)::int AS expected_workdays,
        (SELECT COUNT(*) FROM expected)::int AS expected_employee_days,
        (SELECT COUNT(*) FROM missing_attendance)::int AS missing_employee_days,
@@ -327,7 +333,7 @@ export async function buildPayrollValidationReport(
 
   const issues: PayrollValidationIssue[] = []
   if (totalEmployees === 0) {
-    issues.push({ code: 'no_active_employees', severity: 'critical', message: 'No active employees are available for this payroll period.' })
+    issues.push({ code: 'no_active_employees', severity: 'critical', message: 'No payroll-eligible employees are available for this payroll period.' })
   }
   if (!['weekly', 'semi-monthly', 'monthly'].includes(String(period.pay_frequency))) {
     issues.push({

@@ -7,6 +7,7 @@ import Modal, { ConfirmModal } from '../../../components/ui/Modal'
 import Input from '../../../components/ui/Input'
 import Textarea from '../../../components/ui/Textarea'
 import { EmptyState, FeedbackMessage } from '../../../components/ui/Page'
+import { useToast } from '../../../components/ui/Toast'
 import { departmentService, type DepartmentPayload } from '../../../services/referenceDataService'
 import type { Department } from '../../../types'
 
@@ -100,6 +101,7 @@ function pluralize(count: number, singular: string, plural = `${singular}s`): st
 }
 
 export default function DepartmentsPage() {
+  const { showToast } = useToast()
   const [departments, setDepartments] = useState<Department[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isModalOpen, setIsModalOpen] = useState(false)
@@ -163,7 +165,7 @@ export default function DepartmentsPage() {
           ? current.map((item) => item.id === savedDepartment.id ? savedDepartment : item)
           : [savedDepartment, ...current]
       )
-      setMessage({ variant: 'success', text: editingDepartment ? 'Department updated.' : 'Department created.' })
+      showToast({ variant: 'success', title: editingDepartment ? 'Department updated' : 'Department created' })
       setIsModalOpen(false)
     } catch (err) {
       setMessage({ variant: 'danger', text: err instanceof Error ? err.message : 'Unable to save department.' })
@@ -179,10 +181,7 @@ export default function DepartmentsPage() {
     try {
       const updatedDepartment = await departmentService.toggleActive(department.id)
       setDepartments((current) => current.map((item) => item.id === updatedDepartment.id ? updatedDepartment : item))
-      setMessage({
-        variant: 'success',
-        text: `Department ${updatedDepartment.isActive ? 'activated' : 'deactivated'}.`,
-      })
+      showToast({ variant: 'success', title: `Department ${updatedDepartment.isActive ? 'activated' : 'deactivated'}` })
     } catch (err) {
       setMessage({ variant: 'danger', text: err instanceof Error ? err.message : 'Unable to update department status.' })
     } finally {
@@ -204,7 +203,7 @@ export default function DepartmentsPage() {
     try {
       const result = await departmentService.delete(departmentPendingDelete.id)
       setDepartments((current) => current.filter((item) => item.id !== result.deletedDepartmentId))
-      setMessage({ variant: 'success', text: 'Department deleted.' })
+      showToast({ variant: 'success', title: 'Department deleted' })
       setDepartmentPendingDelete(null)
     } catch (err) {
       setMessage({ variant: 'danger', text: err instanceof Error ? err.message : 'Unable to delete department. Deactivate it instead.' })

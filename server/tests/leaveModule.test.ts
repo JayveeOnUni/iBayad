@@ -4,6 +4,7 @@ import type { NextFunction, Request, Response } from 'express'
 import {
   cancelLeaveRequest,
   previewLeaveRequest,
+  reviewLeaveRequest,
   uploadLeaveDocument,
 } from '../src/controllers/leaveController'
 import { errorHandler } from '../src/middleware/errorHandler'
@@ -11,6 +12,11 @@ import { LeaveBalanceService } from '../src/services/leaveBalanceService'
 import { LeavePolicyService, type LeaveCode, type LeaveValidationResult } from '../src/services/leavePolicyService'
 import { LeaveRequestService } from '../src/services/leaveRequestService'
 import { LeaveApprovalService } from '../src/services/leaveApprovalService'
+import {
+  getLeaveSettings,
+  LeaveSettingsValidationError,
+  updateLeaveSettings,
+} from '../src/services/settingsService'
 import pool from '../src/utils/db'
 
 type QueryResult = { rows: unknown[]; rowCount?: number }
@@ -29,6 +35,7 @@ const originals = {
   getEmployee: LeavePolicyService.getEmployee,
   validate: LeavePolicyService.validate,
   getById: LeaveRequestService.getById,
+  approvalApprove: LeaveApprovalService.approve,
   approvalCancel: LeaveApprovalService.cancel,
 }
 
@@ -39,6 +46,7 @@ function restoreAll() {
   LeavePolicyService.getEmployee = originals.getEmployee
   LeavePolicyService.validate = originals.validate
   LeaveRequestService.getById = originals.getById
+  LeaveApprovalService.approve = originals.approvalApprove
   LeaveApprovalService.cancel = originals.approvalCancel
 }
 
@@ -131,6 +139,61 @@ function installApprovalClientMock(options: { failPayrollStatus?: boolean; docum
   return { queries, released: () => released }
 }
 
+function installLeaveSettingsQueryMock() {
+  ;(pool as unknown as { query: QueryFn }).query = async (text: string): Promise<QueryResult> => {
+    if (text.includes('FROM leave_policies')) {
+      return {
+        rows: [{
+          id: '66666666-6666-4666-8666-666666666666',
+          leave_type_id: leaveTypeId,
+          leave_type_code: 'SOLO_PARENT',
+          leave_type_name: 'Solo Parent Leave',
+          leave_type_is_statutory: true,
+          effective_date: '2026-01-01',
+          employment_status: 'regular',
+          entitlement_days: '7',
+          monthly_credit: '0',
+          carry_over_limit: null,
+          cash_conversion_limit: null,
+          forfeiture_rule: null,
+          notes: 'Protected statutory entitlement',
+        }],
+      }
+    }
+    if (text.includes('FROM leave_types')) {
+      return {
+        rows: [{
+          id: leaveTypeId,
+          code: 'SOLO_PARENT',
+          name: 'Solo Parent Leave',
+          description: 'Protected statutory leave',
+          days_per_year: '7',
+          is_paid: true,
+          is_accrual_based: false,
+          requires_balance: false,
+          applies_to_probationary: true,
+          applies_to_regular: true,
+          max_days_per_request: '7',
+          filing_deadline_days: null,
+          filing_deadline_type: null,
+          requires_document: false,
+          document_rule: null,
+          is_cash_convertible: false,
+          is_carry_over_allowed: false,
+          is_statutory: true,
+          day_count_type: 'working_days',
+          policy_notes: 'Statutory row',
+          is_active: true,
+        }],
+      }
+    }
+    throw new Error(`Unexpected leave settings query: ${text}`)
+  }
+  ;(pool as unknown as { connect: () => Promise<unknown> }).connect = async () => {
+    throw new Error('Protected settings should fail validation before opening a transaction')
+  }
+}
+
 test('approval rolls back when an impact step fails', async () => {
   const state = installApprovalClientMock({ failPayrollStatus: true })
 
@@ -143,6 +206,33 @@ test('approval rolls back when an impact step fails', async () => {
   assert.ok(state.queries.includes('ROLLBACK'))
   assert.equal(state.queries.includes('COMMIT'), false)
   assert.equal(state.released(), true)
+})
+
+test('statutory leave settings protect all exposed and hidden fields', async () => {
+  installLeaveSettingsQueryMock()
+  const current = await getLeaveSettings()
+
+  assert.equal(current.leaveTypes[0].isProtected, true)
+  assert.equal(current.policies[0].isProtected, true)
+
+  await assert.rejects(
+    updateLeaveSettings({
+      leaveTypes: current.leaveTypes.map((item) => ({
+        ...item,
+        description: 'Changed hidden description',
+      })),
+      policies: current.policies.map((item) => ({
+        ...item,
+        notes: 'Changed hidden note',
+      })),
+    }, userId),
+    (error: unknown) => {
+      assert.ok(error instanceof LeaveSettingsValidationError)
+      assert.match(error.errors[`leaveTypes.${leaveTypeId}`]?.[0] ?? '', /protected/i)
+      assert.match(error.errors[`policies.${current.policies[0].id}`]?.[0] ?? '', /protected/i)
+      return true
+    }
+  )
 })
 
 test('employee cannot access or modify another employee leave request', async () => {
@@ -249,6 +339,21 @@ test('approval does not treat declared document placeholders as uploaded documen
 
   assert.ok(state.queries.includes('ROLLBACK'))
   assert.equal(state.queries.some((query) => query.includes("SET status = 'approved'")), false)
+})
+
+test('review approval returns validation error when vacation credits are insufficient', async () => {
+  LeaveApprovalService.approve = async () => {
+    throw new Error('Insufficient vacation leave credits.')
+  }
+
+  const result = await invoke(reviewLeaveRequest, {
+    params: { id: leaveRequestId },
+    body: { action: 'approve', remarks: 'ok' },
+    user: { userId, role: 'admin' },
+  } as Partial<Request>)
+
+  assert.equal(result.statusCode, 400)
+  assert.match(String(result.body.message), /insufficient vacation leave credits/i)
 })
 
 test('maternity uses calendar days while paternity uses working days for payroll input', async () => {

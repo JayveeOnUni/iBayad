@@ -2,6 +2,7 @@ import { api } from './api'
 import type {
   PayrollCalculationSnapshot,
   PayrollPeriod,
+  PayrollSettings,
   ApiResponse,
   PaginatedResponse,
   PayrollReport,
@@ -42,6 +43,16 @@ function normalizePaginated<T>(
   }
 }
 
+export interface GeneratePayrollPeriodPayload {
+  month: string
+  period: 'first' | 'second'
+}
+
+export type PayrollPeriodGenerationSettings = Pick<
+  PayrollSettings,
+  'payFrequency' | 'semiMonthlyCutoff1' | 'semiMonthlyCutoff2' | 'semiMonthlyPayDay1' | 'semiMonthlyPayDay2'
+>
+
 function queryString(params?: Record<string, string | number | boolean | undefined>) {
   const search = new URLSearchParams()
   Object.entries(params ?? {}).forEach(([key, value]) => {
@@ -61,6 +72,10 @@ export const payrollService = {
     api.get<ApiResponse<RawRow>>(`/payroll/periods/${id}`)
       .then((res) => ({ ...res, data: mapPayrollPeriod(res.data) })),
 
+  getPeriodGenerationSettings: () =>
+    api.get<ApiResponse<PayrollPeriodGenerationSettings>>('/payroll/periods/generation-settings')
+      .then((res) => res.data),
+
   validatePeriod: (id: string) =>
     api.post<ApiResponse<RawRow>>(`/payroll/periods/${id}/validation`)
       .then((res) => ({ ...res, data: mapPayrollValidationReport(res.data) as PayrollValidationReport })),
@@ -77,6 +92,10 @@ export const payrollService = {
       payDate: data.payDate,
       payFrequency: data.frequency,
     }).then((res) => ({ ...res, data: mapPayrollPeriod(res.data) })),
+
+  generatePeriod: (data: GeneratePayrollPeriodPayload) =>
+    api.post<ApiResponse<RawRow>>('/payroll/periods/generate', data)
+      .then((res) => ({ ...res, data: mapPayrollPeriod(res.data) })),
 
   updatePeriod: (id: string, data: Partial<PayrollPeriod>) =>
     api.put<ApiResponse<PayrollPeriod>>(`/payroll/periods/${id}`, data),

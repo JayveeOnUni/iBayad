@@ -8,6 +8,7 @@ import Avatar from '../../../components/ui/Avatar'
 import { formatDate } from '../../../utils/dateHelpers'
 import type { LeaveApplication } from '../../../types'
 import { leaveService } from '../../../services/leaveService'
+import { useToast } from '../../../components/ui/Toast'
 
 const leaveTypeLabel: Record<string, string> = {
   vacation: 'Vacation Leave',
@@ -27,6 +28,7 @@ const statusVariant: Record<string, 'warning' | 'success' | 'danger' | 'neutral'
 }
 
 export default function LeaveStatusPage() {
+  const { showToast } = useToast()
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [tab, setTab] = useState<'all' | 'pending'>('pending')
@@ -68,7 +70,10 @@ export default function LeaveStatusPage() {
         await leaveService.reject(id, 'Rejected by reviewer')
       }
       await loadLeaves()
-      setMessage(`Leave request ${action === 'approve' ? 'approved' : 'rejected'}.`)
+      showToast({
+        variant: 'success',
+        title: `Leave request ${action === 'approve' ? 'approved' : 'rejected'}`,
+      })
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Unable to review leave request.')
     }

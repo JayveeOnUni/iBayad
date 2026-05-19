@@ -7,6 +7,7 @@ import Card from '../../../components/ui/Card'
 import Table from '../../../components/ui/Table'
 import Textarea from '../../../components/ui/Textarea'
 import { FeedbackMessage } from '../../../components/ui/Page'
+import { useToast } from '../../../components/ui/Toast'
 import { profileUpdateRequestService } from '../../../services/profileUpdateRequestService'
 import type { ProfileUpdateChange, ProfileUpdateRequest } from '../../../types'
 import { formatDate } from '../../../utils/dateHelpers'
@@ -35,6 +36,7 @@ function changeSummary(changes: Record<string, ProfileUpdateChange>) {
 }
 
 export default function ProfileUpdateRequestsPage() {
+  const { showToast } = useToast()
   const [tab, setTab] = useState<'pending' | 'all'>('pending')
   const [requests, setRequests] = useState<ProfileUpdateRequest[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -85,9 +87,9 @@ export default function ProfileUpdateRequestsPage() {
       }
       setRemarks('')
       await loadRequests()
-      setMessage({
-        text: `Profile update request ${action === 'approve' ? 'approved' : 'rejected'}.`,
+      showToast({
         variant: 'success',
+        title: `Profile update request ${action === 'approve' ? 'approved' : 'rejected'}`,
       })
     } catch (err) {
       setMessage({

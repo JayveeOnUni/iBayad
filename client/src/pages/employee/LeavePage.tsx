@@ -5,6 +5,7 @@ import Button from '../../components/ui/Button'
 import Card from '../../components/ui/Card'
 import Input from '../../components/ui/Input'
 import { leaveService } from '../../services/leaveService'
+import { useToast } from '../../components/ui/Toast'
 import { format } from '../../utils/dateHelpers'
 import type { LeaveApplication, LeaveApplicationFormData, LeaveBalance, LeaveTypeConfig } from '../../types'
 
@@ -55,6 +56,7 @@ function statusPath(status: string) {
 }
 
 export default function EmployeeLeavePage() {
+  const { showToast } = useToast()
   const [leaveTypes, setLeaveTypes] = useState<LeaveTypeConfig[]>([])
   const [balances, setBalances] = useState<LeaveBalance[]>([])
   const [requests, setRequests] = useState<LeaveApplication[]>([])
@@ -146,7 +148,7 @@ export default function EmployeeLeavePage() {
       setCancellingId(id)
       setMessage(null)
       await leaveService.cancel(id)
-      setMessage('Leave request cancelled.')
+      showToast({ variant: 'success', title: 'Leave request cancelled' })
       await loadLeave()
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Unable to cancel leave request.')
@@ -179,7 +181,7 @@ export default function EmployeeLeavePage() {
       setMessage(null)
       await leaveService.uploadDocument(request.id, documentForm)
       setDocumentForms((current) => ({ ...current, [request.id]: { documentType: documentForm.documentType, fileName: '', fileUrl: '' } }))
-      setMessage('Document link uploaded.')
+      showToast({ variant: 'success', title: 'Document link uploaded' })
       await loadLeave()
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Unable to upload document link.')
@@ -196,7 +198,11 @@ export default function EmployeeLeavePage() {
       await leaveService.apply(form)
       setForm(initialForm)
       setPreview(null)
-      setMessage('Leave request submitted for review.')
+      showToast({
+        variant: 'success',
+        title: 'Leave request submitted',
+        description: 'Sent for review.',
+      })
       await loadLeave()
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Unable to submit leave request.')

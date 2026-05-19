@@ -5,6 +5,7 @@ import Card from '../../../components/ui/Card'
 import Button from '../../../components/ui/Button'
 import Input from '../../../components/ui/Input'
 import { FeedbackMessage, PageHeader } from '../../../components/ui/Page'
+import { useToast } from '../../../components/ui/Toast'
 import { settingsService } from '../../../services/settingsService'
 import type { GeneralSettings } from '../../../types'
 
@@ -54,6 +55,7 @@ function extractServerFieldErrors(error: unknown): Partial<Record<GeneralSetting
 }
 
 export default function GeneralSettingsPage() {
+  const { showToast } = useToast()
   const [message, setMessage] = useState<PageMessage | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
@@ -106,7 +108,7 @@ export default function GeneralSettingsPage() {
     try {
       const savedSettings = await settingsService.updateGeneral(payload)
       reset({ ...emptySettings, ...savedSettings })
-      setMessage({ variant: 'success', text: 'General settings saved.' })
+      showToast({ variant: 'success', title: 'General settings saved' })
     } catch (err) {
       const fieldErrors = extractServerFieldErrors(err)
       Object.entries(fieldErrors).forEach(([field, errorMessage]) => {

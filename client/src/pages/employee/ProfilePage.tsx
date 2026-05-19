@@ -7,6 +7,7 @@ import Input from '../../components/ui/Input'
 import Avatar from '../../components/ui/Avatar'
 import Badge from '../../components/ui/Badge'
 import { EmptyState, FeedbackMessage, PageHeader } from '../../components/ui/Page'
+import { useToast } from '../../components/ui/Toast'
 import { useAuthStore } from '../../store/authStore'
 import { useAuth } from '../../hooks/useAuth'
 import { employeeService } from '../../services/employeeService'
@@ -145,6 +146,7 @@ function changedFieldSummary(changes: Record<string, ProfileUpdateChange>) {
 }
 
 export default function ProfilePage() {
+  const { showToast } = useToast()
   const { user } = useAuthStore()
   const { changePassword } = useAuth()
   const [profile, setProfile] = useState<Employee | null>(null)
@@ -213,7 +215,7 @@ export default function ProfilePage() {
       .filter(({ current, requested }) => current !== requested)
 
     if (changes.length === 0) {
-      setMessage({ text: 'No profile changes to request.', variant: 'info' })
+      showToast({ variant: 'info', title: 'No profile changes to request' })
       return
     }
 
@@ -224,9 +226,10 @@ export default function ProfilePage() {
       const requestsRes = await employeeService.listMyProfileUpdateRequests()
       setRecentRequests(requestsRes.data)
       resetPersonal(currentValues)
-      setMessage({
-        text: 'Profile update request submitted for HR review.',
+      showToast({
         variant: 'success',
+        title: 'Profile update request submitted',
+        description: 'HR will review the changes.',
       })
     } catch (err) {
       setMessage({
@@ -250,7 +253,7 @@ export default function ProfilePage() {
 
     const result = await changePassword(data.currentPassword, data.newPassword)
     if (result.ok) {
-      setMessage({ text: 'Password changed successfully.', variant: 'success' })
+      showToast({ variant: 'success', title: 'Password changed successfully' })
       resetPassword()
     } else {
       setMessage({ text: result.error ?? 'Failed to change password.', variant: 'danger' })

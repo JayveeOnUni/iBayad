@@ -5,6 +5,11 @@ import { createError } from '../middleware/errorHandler'
 import type { Pool, PoolClient } from 'pg'
 import crypto from 'crypto'
 import { getPayrollPolicySettings } from './settingsService'
+import {
+  getPayrollComputationWindow,
+  payrollComputationEndExpression,
+  payrollEligibleEmployeeCondition,
+} from './payrollEmployeeEligibility'
 
 type Queryable = Pool | PoolClient
 
@@ -135,6 +140,12 @@ function toNumber(value: unknown): number {
 function dateOnly(value: Date | string): string {
   if (value instanceof Date) return value.toISOString().slice(0, 10)
   return String(value ?? '').slice(0, 10)
+}
+
+function localDateOnly(value: Date): string {
+  const month = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+  return `${value.getFullYear()}-${month}-${day}`
 }
 
 function stableStringify(value: unknown): string {
@@ -640,10 +651,11 @@ async function markLeaveAdjustmentsApplied(
   )
 }
 
-async function cancelRecordsForEmployeesHiredAfterPeriod(
+async function cancelRecordsForIneligibleEmployees(
   db: Queryable,
   payrollPeriodId: string
 ): Promise<void> {
+  const eligibilityCondition = payrollEligibleEmployeeCondition('e', 'pp')
   const records = await db.query(
     `SELECT pr.id
      FROM payroll_records pr
@@ -651,7 +663,7 @@ async function cancelRecordsForEmployeesHiredAfterPeriod(
      JOIN employees e ON e.id = pr.employee_id
      WHERE pr.payroll_period_id = $1
        AND pr.is_locked = false
-       AND e.hire_date > pp.end_date`,
+       AND NOT (${eligibilityCondition})`,
     [payrollPeriodId]
   )
   const recordIds = records.rows.map((row) => row.id)
@@ -706,7 +718,7 @@ async function cancelRecordsForEmployeesHiredAfterPeriod(
          net_pay = 0,
          statutory_rule_version = NULL,
          statutory_rule_versions = '{}'::jsonb,
-         computation_breakdown = '{"status":"cancelled","reason":"Employee hire date is after this payroll period."}'::jsonb,
+         computation_breakdown = '{"status":"cancelled","reason":"Employee is not eligible for this payroll period."}'::jsonb,
          current_snapshot_id = NULL,
          status = 'cancelled',
          updated_at = NOW()
@@ -733,20 +745,23 @@ export async function processBatchPayroll(
   }
 
   const periodRow = period.rows[0]
-  const periodStart = new Date(periodRow.start_date)
-  const periodEnd = new Date(periodRow.end_date)
   const payFrequency = periodRow.pay_frequency as PayFrequency
   const payrollPolicy = await getPayrollPolicySettings()
   const nightDifferentialHoursExpression = payrollPolicy.nightDifferentialEnabled
     ? 'COALESCE(SUM(a.night_diff_hours), 0)'
     : '0'
 
-  await cancelRecordsForEmployeesHiredAfterPeriod(db, payrollPeriodId)
+  await cancelRecordsForIneligibleEmployees(db, payrollPeriodId)
 
-  // Fetch active employees who were already hired for this cutoff and summarize
-  // backend-owned payroll inputs from their hire date onward.
+  const eligibilityCondition = payrollEligibleEmployeeCondition('e', 'pp')
+  const computationEndExpression = payrollComputationEndExpression('e', 'pp')
+
+  // Fetch payroll-eligible employees and summarize backend-owned payroll inputs
+  // inside each employee's covered part of the cutoff.
   const employees = await db.query(
     `SELECT e.id, e.basic_salary, e.work_days_per_month, e.work_hours_per_day, e.hire_date,
+            e.employment_status, e.is_deleted, e.last_working_day, e.separation_date,
+            ${computationEndExpression} AS payroll_period_end,
             COALESCE(SUM(CASE WHEN a.status IN ('present', 'late', 'half_day') THEN 1 ELSE 0 END), 0) AS days_worked,
             COALESCE(SUM(CASE WHEN a.status = 'on_leave' THEN 1 ELSE 0 END), 0) AS leave_attendance_days,
             COALESCE(SUM(CASE WHEN a.status = 'absent' THEN 1 ELSE 0 END), 0) AS absence_days,
@@ -769,9 +784,8 @@ export async function processBatchPayroll(
      LEFT JOIN attendance a ON a.employee_id = e.id
        AND a.date BETWEEN pp.start_date AND pp.end_date
        AND a.date >= GREATEST(e.hire_date, pp.start_date)
-     WHERE e.employment_status = 'active'
-       AND e.is_deleted = false
-       AND e.hire_date <= pp.end_date
+       AND a.date <= ${computationEndExpression}
+     WHERE ${eligibilityCondition}
        AND NOT EXISTS (
          SELECT 1
          FROM payroll_records excluded_pr
@@ -779,7 +793,8 @@ export async function processBatchPayroll(
            AND excluded_pr.employee_id = e.id
            AND excluded_pr.status::text IN ('cancelled', 'voided')
        )
-     GROUP BY e.id, e.basic_salary, e.work_days_per_month, e.work_hours_per_day, e.hire_date`,
+     GROUP BY e.id, e.basic_salary, e.work_days_per_month, e.work_hours_per_day, e.hire_date,
+              e.employment_status, e.is_deleted, e.last_working_day, e.separation_date, pp.end_date`,
     [payrollPeriodId]
   )
 
@@ -790,13 +805,28 @@ export async function processBatchPayroll(
     try {
       const workDaysPerMonth = Number(emp.work_days_per_month ?? 22) || 22
       const dailyRate = getDailyRate(Number(emp.basic_salary), workDaysPerMonth)
-      const employeePeriodStart = new Date(Math.max(periodStart.getTime(), new Date(emp.hire_date).getTime()))
-      const employeeExpectedWorkDays = countWorkingDays(employeePeriodStart, periodEnd)
+      const computationWindow = getPayrollComputationWindow({
+        employment_status: emp.employment_status,
+        is_deleted: Boolean(emp.is_deleted),
+        hire_date: emp.hire_date,
+        last_working_day: emp.last_working_day,
+        separation_date: emp.separation_date,
+      }, {
+        start_date: periodRow.start_date,
+        end_date: periodRow.end_date,
+      })
+      if (!computationWindow) continue
+
+      const employeePeriodStart = computationWindow.startDate
+      const employeePeriodEnd = computationWindow.endDate
+      const employeePeriodStartDate = localDateOnly(employeePeriodStart)
+      const employeePeriodEndDate = localDateOnly(employeePeriodEnd)
+      const employeeExpectedWorkDays = countWorkingDays(employeePeriodStart, employeePeriodEnd)
       const leaveImpact = await getLeavePayrollImpact(db, {
         employeeId: emp.id,
         payrollPeriodId,
-        periodStart: employeePeriodStart,
-        periodEnd: periodRow.end_date,
+        periodStart: employeePeriodStartDate,
+        periodEnd: employeePeriodEndDate,
         paidLeaveAttendanceDays: Number(emp.leave_attendance_days),
         dailyRate,
       })
@@ -809,7 +839,7 @@ export async function processBatchPayroll(
         payrollPeriodId,
         basicSalary: Number(emp.basic_salary),
         payFrequency,
-        periodEndDate: periodRow.end_date,
+        periodEndDate: employeePeriodEndDate,
         expectedWorkDays: employeeExpectedWorkDays,
         daysWorked,
         absenceDays: Number(emp.absence_days),
@@ -852,8 +882,8 @@ export async function processBatchPayroll(
         payrollRecordId,
         payrollPeriodId,
         payrollFrequency: payFrequency,
-        periodStart: employeePeriodStart,
-        periodEnd: periodRow.end_date,
+        periodStart: employeePeriodStartDate,
+        periodEnd: employeePeriodEndDate,
         computedBy: options.computedBy,
       }, db)
       processed++

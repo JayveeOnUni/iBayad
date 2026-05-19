@@ -1,9 +1,9 @@
 import { useForm } from 'react-hook-form'
-import { useState } from 'react'
 import { Save } from 'lucide-react'
 import Card from '../../../components/ui/Card'
 import Button from '../../../components/ui/Button'
 import Input from '../../../components/ui/Input'
+import { useToast } from '../../../components/ui/Toast'
 
 interface AttendanceSettingsForm {
   graceMinutes: number
@@ -17,7 +17,7 @@ interface AttendanceSettingsForm {
 }
 
 export default function AttendanceSettingsPage() {
-  const [message, setMessage] = useState<string | null>(null)
+  const { showToast } = useToast()
   const { register, handleSubmit } = useForm<AttendanceSettingsForm>({
     defaultValues: {
       graceMinutes: 5,
@@ -33,7 +33,11 @@ export default function AttendanceSettingsPage() {
 
   const onSubmit = (data: AttendanceSettingsForm) => {
     localStorage.setItem('ibayad-attendance-settings', JSON.stringify(data))
-    setMessage('Attendance settings saved for this workstation.')
+    showToast({
+      variant: 'success',
+      title: 'Attendance settings saved',
+      description: 'Saved for this workstation.',
+    })
   }
 
   return (
@@ -42,8 +46,6 @@ export default function AttendanceSettingsPage() {
         <h2 className="text-xl font-bold text-ink">Attendance Settings</h2>
         <p className="text-sm text-muted mt-0.5">Configure attendance rules, grace periods, and time tracking</p>
       </div>
-
-      {message && <div className="text-sm text-ink bg-slate-50 border border-border rounded-lg px-4 py-3">{message}</div>}
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
         <Card>

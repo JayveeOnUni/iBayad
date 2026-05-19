@@ -27,10 +27,10 @@ import Input from '../../../components/ui/Input'
 import Select from '../../../components/ui/Select'
 import Textarea from '../../../components/ui/Textarea'
 import { EmptyState, FeedbackMessage, PageHeader } from '../../../components/ui/Page'
+import { useToast } from '../../../components/ui/Toast'
 import { formatDate, formatDateTime } from '../../../utils/dateHelpers'
 import { formatPeso } from '../../../utils/taxComputation'
 import type {
-  PayFrequency,
   PayrollAuditEntry,
   PayrollCalculationSnapshot,
   PayrollPeriod,
@@ -40,7 +40,7 @@ import type {
   PayrollStatus,
   PayrollValidationReport,
 } from '../../../types'
-import { payrollService } from '../../../services/payrollService'
+import { payrollService, type PayrollPeriodGenerationSettings } from '../../../services/payrollService'
 import { useAuthStore } from '../../../store/authStore'
 
 type PageMessage = {
@@ -51,11 +51,16 @@ type PageMessage = {
 type PayrollAction = 'process' | 'approve' | 'release' | 'correction'
 
 type PeriodForm = {
+  month: string
+  period: 'first' | 'second'
+}
+
+type PeriodPreview = {
   name: string
   startDate: string
   endDate: string
   payDate: string
-  frequency: PayFrequency
+  frequency: PayrollPeriodGenerationSettings['payFrequency']
 }
 
 const statusVariant: Record<PayrollStatus, 'success' | 'info' | 'neutral' | 'warning' | 'danger'> = {
@@ -103,13 +108,9 @@ function hasPayrollPermission(role: string | undefined, permission: string) {
 const today = () => new Date().toISOString().slice(0, 10)
 
 function defaultForm(): PeriodForm {
-  const currentDate = today()
   return {
-    name: '',
-    startDate: currentDate,
-    endDate: currentDate,
-    payDate: currentDate,
-    frequency: 'semi-monthly',
+    month: today().slice(0, 7),
+    period: 'first',
   }
 }
 
@@ -149,26 +150,6 @@ function shortRuleVersion(value?: string) {
   return value.split('|').map((part) => part.replace(/BIR-RR-11-2018-2023-/, 'BIR-')).join(' | ')
 }
 
-function validatePeriodForm(form: PeriodForm): string | null {
-  if (!form.name.trim()) return 'Payroll period name is required.'
-  if (!form.startDate || !form.endDate || !form.payDate) return 'Start date, end date, and pay date are required.'
-  if (form.startDate > form.endDate) return 'Start date must be on or before end date.'
-  if (form.payDate < form.endDate) return 'Pay date cannot be before the payroll period end date.'
-
-  const start = new Date(`${form.startDate}T00:00:00`)
-  const end = new Date(`${form.endDate}T00:00:00`)
-  const days = Math.floor((end.getTime() - start.getTime()) / 86_400_000) + 1
-  const maxDays: Record<PayFrequency, number> = {
-    weekly: 7,
-    'semi-monthly': 16,
-    monthly: 31,
-  }
-  if (days > maxDays[form.frequency]) {
-    return `${form.frequency} payroll periods cannot be longer than ${maxDays[form.frequency]} calendar days.`
-  }
-  return null
-}
-
 function auditLabel(entry: PayrollAuditEntry) {
   return entry.action.replace(/_/g, ' ')
 }
@@ -195,6 +176,72 @@ const reportTypes: Array<{ type: PayrollReportType; label: string }> = [
   { type: 'attendance', label: 'Attendance' },
 ]
 
+const payrollMonthNames = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+]
+
+function daysInMonth(year: number, monthIndex: number) {
+  return new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate()
+}
+
+function isoDateFromParts(year: number, monthIndex: number, day: number) {
+  const clampedDay = Math.min(day, daysInMonth(year, monthIndex))
+  return new Date(Date.UTC(year, monthIndex, clampedDay)).toISOString().slice(0, 10)
+}
+
+function buildPeriodPreview(settings: PayrollPeriodGenerationSettings, form: PeriodForm): PeriodPreview {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(form.month)) {
+    throw new Error('Select a payroll month.')
+  }
+  if (settings.payFrequency !== 'semi-monthly') {
+    throw new Error('Payroll period generation requires semi-monthly payroll settings.')
+  }
+
+  const [yearText, monthText] = form.month.split('-')
+  const year = Number(yearText)
+  const monthIndex = Number(monthText) - 1
+  const cutoff1 = Number(settings.semiMonthlyCutoff1)
+  const cutoff2 = Number(settings.semiMonthlyCutoff2)
+  const payDay1 = Number(settings.semiMonthlyPayDay1)
+  const payDay2 = Number(settings.semiMonthlyPayDay2)
+  const name = `${payrollMonthNames[monthIndex]} ${year} - ${form.period === 'first' ? '1st' : '2nd'} Period`
+
+  if (form.period === 'first') {
+    return {
+      name,
+      startDate: isoDateFromParts(year, monthIndex, 1),
+      endDate: isoDateFromParts(year, monthIndex, cutoff1),
+      payDate: isoDateFromParts(year, monthIndex, payDay1),
+      frequency: settings.payFrequency,
+    }
+  }
+
+  const startDate = isoDateFromParts(year, monthIndex, cutoff1 + 1)
+  const endDate = isoDateFromParts(year, monthIndex, cutoff2)
+  const sameMonthPayDate = isoDateFromParts(year, monthIndex, payDay2)
+  const nextMonthDate = new Date(Date.UTC(year, monthIndex + 1, 1))
+  const nextMonthPayDate = isoDateFromParts(nextMonthDate.getUTCFullYear(), nextMonthDate.getUTCMonth(), payDay2)
+
+  return {
+    name,
+    startDate,
+    endDate,
+    payDate: sameMonthPayDate <= endDate ? nextMonthPayDate : sameMonthPayDate,
+    frequency: settings.payFrequency,
+  }
+}
+
 function prettyColumn(value: string) {
   return value.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
@@ -207,6 +254,7 @@ function renderReportValue(key: string, value: unknown) {
 }
 
 export default function PayrollPage() {
+  const { showToast } = useToast()
   const currentUser = useAuthStore((state) => state.user)
   const [periodPage, setPeriodPage] = useState(1)
   const [recordPage, setRecordPage] = useState(1)
@@ -230,6 +278,8 @@ export default function PayrollPage() {
   const [message, setMessage] = useState<PageMessage | null>(null)
   const [isNewOpen, setIsNewOpen] = useState(false)
   const [form, setForm] = useState<PeriodForm>(defaultForm)
+  const [payrollSettings, setPayrollSettings] = useState<PayrollPeriodGenerationSettings | null>(null)
+  const [isSettingsLoading, setIsSettingsLoading] = useState(false)
   const [confirmAction, setConfirmAction] = useState<{
     action: PayrollAction
     period: PayrollPeriod
@@ -325,6 +375,29 @@ export default function PayrollPage() {
   }, [loadPeriods])
 
   useEffect(() => {
+    if (!isNewOpen || payrollSettings) return
+    let isMounted = true
+
+    setIsSettingsLoading(true)
+    payrollService.getPeriodGenerationSettings()
+      .then((settings) => {
+        if (!isMounted) return
+        setPayrollSettings(settings)
+      })
+      .catch((err) => {
+        if (!isMounted) return
+        setMessage({ variant: 'error', text: err instanceof Error ? err.message : 'Unable to load payroll settings.' })
+      })
+      .finally(() => {
+        if (isMounted) setIsSettingsLoading(false)
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [isNewOpen, payrollSettings])
+
+  useEffect(() => {
     if (!selectedPeriodId) return
     loadPeriodDetails(selectedPeriodId)
   }, [loadPeriodDetails, selectedPeriodId])
@@ -346,6 +419,17 @@ export default function PayrollPage() {
     ? (validationReport.periodId === selectedPeriod?.id ? validationReport.issues : [])
     : []
   const focusValidationReport = validationReport?.periodId === focusPeriod?.id ? validationReport : null
+  const periodPreviewState = useMemo(() => {
+    if (!payrollSettings) return { preview: null as PeriodPreview | null, error: null as string | null }
+    try {
+      return { preview: buildPeriodPreview(payrollSettings, form), error: null }
+    } catch (err) {
+      return {
+        preview: null,
+        error: err instanceof Error ? err.message : 'Unable to preview payroll dates.',
+      }
+    }
+  }, [form, payrollSettings])
   const hasCriticalValidationIssues =
     !!validationReport &&
     validationReport.periodId === selectedPeriod?.id &&
@@ -378,16 +462,15 @@ export default function PayrollPage() {
   }
 
   const createPeriod = async () => {
-    const validation = validatePeriodForm(form)
-    if (validation) {
-      setMessage({ variant: 'error', text: validation })
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(form.month)) {
+      setMessage({ variant: 'error', text: 'Select a payroll month.' })
       return
     }
 
     try {
       setIsSaving(true)
       setMessage(null)
-      const created = await payrollService.createPeriod({ ...form })
+      const created = await payrollService.generatePeriod(form)
       setIsNewOpen(false)
       setForm(defaultForm())
       setSelectedPeriodId(created.data.id)
@@ -395,7 +478,11 @@ export default function PayrollPage() {
       try {
         await loadPeriods({ preserveMessage: true, rethrow: true })
         await loadPeriodDetails(created.data.id, { preserveMessage: true, rethrow: true, page: 1 })
-        setMessage({ variant: 'success', text: created.message ?? 'Payroll period created.' })
+        showToast({
+          variant: 'success',
+          title: 'Payroll period created',
+          description: created.message,
+        })
       } catch (reloadErr) {
         const text = reloadErr instanceof Error ? reloadErr.message : 'The payroll list did not refresh.'
         setMessage({ variant: 'warning', text: `Payroll period created, but refresh failed: ${text}` })
@@ -416,10 +503,11 @@ export default function PayrollPage() {
       setValidationReport(res.data)
       await loadPeriods({ preserveMessage: true })
       await loadPeriodDetails(selectedPeriod.id, { preserveMessage: true })
-      setMessage({
-        variant: res.data.isValid ? 'success' : 'warning',
-        text: res.data.isValid ? 'Validation Passed' : 'Validation Issues Found. Fix Issues Before Approval.',
-      })
+      if (res.data.isValid) {
+        showToast({ variant: 'success', title: 'Validation passed' })
+      } else {
+        setMessage({ variant: 'warning', text: 'Validation Issues Found. Fix Issues Before Approval.' })
+      }
     } catch (err) {
       setMessage({ variant: 'error', text: err instanceof Error ? err.message : 'Unable to validate payroll.' })
     } finally {
@@ -458,7 +546,7 @@ export default function PayrollPage() {
       try {
         await loadPeriods({ preserveMessage: true, rethrow: true })
         await loadPeriodDetails(period.id, { preserveMessage: true, rethrow: true, page: 1 })
-        setMessage({ variant: 'success', text: successText })
+        showToast({ variant: 'success', title: successText.replace(/\.$/, '') })
       } catch (reloadErr) {
         const text = reloadErr instanceof Error ? reloadErr.message : 'The payroll workspace did not refresh.'
         setMessage({ variant: 'warning', text: `${successText} Refresh failed: ${text}` })
@@ -482,7 +570,7 @@ export default function PayrollPage() {
       link.download = `payslip-${record.employee?.employeeNumber ?? record.id}.pdf`
       link.click()
       URL.revokeObjectURL(url)
-      setMessage({ variant: 'success', text: 'Payslip downloaded.' })
+      showToast({ variant: 'success', title: 'Payslip downloaded' })
     } catch (err) {
       setMessage({ variant: 'error', text: err instanceof Error ? err.message : 'Unable to download payslip.' })
     } finally {
@@ -512,7 +600,11 @@ export default function PayrollPage() {
       setVoidRecordConfirm(null)
       await loadPeriods({ preserveMessage: true })
       await loadPeriodDetails(selectedPeriod.id, { preserveMessage: true })
-      setMessage({ variant: 'success', text: res.message ?? 'Payroll record voided.' })
+      showToast({
+        variant: 'success',
+        title: 'Payroll record voided',
+        description: res.message,
+      })
     } catch (err) {
       setMessage({ variant: 'error', text: err instanceof Error ? err.message : 'Unable to void payroll record.' })
     } finally {
@@ -558,7 +650,7 @@ export default function PayrollPage() {
       link.download = match?.[1] ?? `${reportType}-${selectedPeriod.startDate}-to-${selectedPeriod.endDate}.csv`
       link.click()
       URL.revokeObjectURL(url)
-      setMessage({ variant: 'success', text: 'Report exported.' })
+      showToast({ variant: 'success', title: 'Report exported' })
     } catch (err) {
       setMessage({ variant: 'error', text: err instanceof Error ? err.message : 'Unable to export report.' })
     } finally {
@@ -1295,22 +1387,54 @@ export default function PayrollPage() {
         }
       >
         <div className="space-y-4">
-          <Input label="Name" required value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} />
-          <Select
-            label="Frequency"
-            required
-            value={form.frequency}
-            onChange={(event) => setForm((current) => ({ ...current, frequency: event.target.value as PayFrequency }))}
-          >
-            <option value="weekly">Weekly</option>
-            <option value="semi-monthly">Semi-monthly</option>
-            <option value="monthly">Monthly</option>
-          </Select>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Input label="Start Date" type="date" required value={form.startDate} onChange={(event) => setForm((current) => ({ ...current, startDate: event.target.value }))} />
-            <Input label="End Date" type="date" required value={form.endDate} onChange={(event) => setForm((current) => ({ ...current, endDate: event.target.value }))} />
+            <Input
+              label="Payroll Month"
+              type="month"
+              required
+              value={form.month}
+              onChange={(event) => setForm((current) => ({ ...current, month: event.target.value }))}
+            />
+            <Select
+              label="Payroll Period"
+              required
+              value={form.period}
+              onChange={(event) => setForm((current) => ({ ...current, period: event.target.value as PeriodForm['period'] }))}
+            >
+              <option value="first">1st Period</option>
+              <option value="second">2nd Period</option>
+            </Select>
           </div>
-          <Input label="Pay Date" type="date" required value={form.payDate} onChange={(event) => setForm((current) => ({ ...current, payDate: event.target.value }))} />
+          <div className="rounded-lg border border-border bg-neutral-20 p-4">
+            {isSettingsLoading ? (
+              <p className="text-sm text-muted">Loading generated date preview...</p>
+            ) : periodPreviewState.error ? (
+              <p className="text-sm text-danger">{periodPreviewState.error}</p>
+            ) : periodPreviewState.preview ? (
+              <div className="space-y-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted">Generated Name</p>
+                  <p className="text-sm font-semibold text-ink">{periodPreviewState.preview.name}</p>
+                </div>
+                <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted">Start Date</p>
+                    <p className="text-ink">{formatDate(periodPreviewState.preview.startDate)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted">End Date</p>
+                    <p className="text-ink">{formatDate(periodPreviewState.preview.endDate)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted">Pay Date</p>
+                    <p className="text-ink">{formatDate(periodPreviewState.preview.payDate)}</p>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-muted">Generated dates will appear after Payroll Settings load.</p>
+            )}
+          </div>
         </div>
       </Modal>
 

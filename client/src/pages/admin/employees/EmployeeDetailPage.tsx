@@ -22,6 +22,7 @@ import {
   type ActivePositionLookup,
   type ActiveShiftLookup,
 } from '../../../services/referenceDataService'
+import { useToast } from '../../../components/ui/Toast'
 
 interface InfoRowProps {
   icon?: React.ReactNode
@@ -87,6 +88,7 @@ function InfoRow({ icon, label, value }: InfoRowProps) {
 }
 
 export default function EmployeeDetailPage() {
+  const { showToast } = useToast()
   const navigate = useNavigate()
   const { id } = useParams()
   const [employee, setEmployee] = useState<Employee | null>(null)
@@ -220,6 +222,7 @@ export default function EmployeeDetailPage() {
         .then((taxRes) => setDeductionPreview(taxRes.data))
         .catch(() => setDeductionPreview(null))
       setIsEditOpen(false)
+      showToast({ variant: 'success', title: 'Employee updated' })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to update employee.')
     } finally {
@@ -234,11 +237,11 @@ export default function EmployeeDetailPage() {
       setError(null)
       setSuccess(null)
       const res = await employeeService.resendActivation(employee.id)
-      setSuccess(
-        res.activationLink
-          ? `${res.message ?? 'Activation email sent.'} Activation link: ${res.activationLink}`
-          : res.message ?? 'Activation email sent.'
-      )
+      if (res.activationLink) {
+        setSuccess(`${res.message ?? 'Activation email sent.'} Activation link: ${res.activationLink}`)
+      } else {
+        showToast({ variant: 'success', title: 'Activation email sent', description: res.message })
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to resend activation email.')
     } finally {
@@ -255,7 +258,7 @@ export default function EmployeeDetailPage() {
       const res = await employeeService.separate(employee.id, separationForm)
       setEmployee(res.data)
       setIsSeparationOpen(false)
-      setSuccess(res.message ?? 'Employee offboarding recorded.')
+      showToast({ variant: 'success', title: 'Employee offboarding recorded', description: res.message })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to record employee separation.')
     } finally {
@@ -272,7 +275,7 @@ export default function EmployeeDetailPage() {
       const res = await employeeService.archive(employee.id)
       setEmployee(res.data)
       setIsArchiveOpen(false)
-      setSuccess(res.message ?? 'Employee archived.')
+      showToast({ variant: 'success', title: 'Employee archived', description: res.message })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to archive employee.')
     } finally {
@@ -291,11 +294,11 @@ export default function EmployeeDetailPage() {
       setIsReactivateOpen(false)
       setIsRestoreOpen(false)
       if (res.loginAccessRestored) {
-        setSuccess('Employee reactivated. Login access has been restored.')
+        showToast({ variant: 'success', title: 'Employee reactivated', description: 'Login access has been restored.' })
       } else if (res.activationRequired) {
-        setSuccess('Employee reactivated. Account activation is still required before login access is restored.')
+        showToast({ variant: 'success', title: 'Employee reactivated', description: 'Account activation is still required before login access is restored.' })
       } else {
-        setSuccess(res.message ?? 'Employee reactivated.')
+        showToast({ variant: 'success', title: 'Employee reactivated', description: res.message })
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to reactivate employee.')
@@ -371,7 +374,7 @@ export default function EmployeeDetailPage() {
       )}
 
       {success && (
-        <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-3">
+        <div className="text-sm text-brand-800 bg-info-muted border border-info-border rounded-lg px-4 py-3">
           {success}
         </div>
       )}

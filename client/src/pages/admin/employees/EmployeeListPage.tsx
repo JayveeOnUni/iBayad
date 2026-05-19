@@ -9,6 +9,7 @@ import Avatar from '../../../components/ui/Avatar'
 import Input from '../../../components/ui/Input'
 import Select from '../../../components/ui/Select'
 import { FeedbackMessage, PageHeader } from '../../../components/ui/Page'
+import { useToast } from '../../../components/ui/Toast'
 import type { Employee } from '../../../types'
 import { formatDate } from '../../../utils/dateHelpers'
 import { formatPeso } from '../../../utils/taxComputation'
@@ -25,10 +26,10 @@ interface ActivationFollowUp {
 }
 
 export default function EmployeeListPage() {
+  const { showToast } = useToast()
   const navigate = useNavigate()
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('active')
-  const [includeArchived, setIncludeArchived] = useState(false)
   const [page, setPage] = useState(1)
   const [totalEmployees, setTotalEmployees] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
@@ -51,7 +52,6 @@ export default function EmployeeListPage() {
         search: search || undefined,
         status: statusFilter || undefined,
         includeFormer: statusFilter !== 'active',
-        includeArchived,
       })
       setEmployees(res.data)
       setTotalEmployees(res.total)
@@ -61,7 +61,7 @@ export default function EmployeeListPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [page, search, statusFilter, includeArchived])
+  }, [page, search, statusFilter])
 
   useEffect(() => {
     void loadEmployees()
@@ -83,11 +83,17 @@ export default function EmployeeListPage() {
     }
 
     setActivationFollowUp(null)
-    setSuccess(
-      res.activationLink
-        ? `${res.message ?? 'Employee account created.'} Activation link: ${res.activationLink}`
-        : res.message ?? 'Employee account created. Activation email sent.'
-    )
+    if (res.activationLink) {
+      setSuccess(`${res.message ?? 'Employee account created.'} Activation link: ${res.activationLink}`)
+      return
+    }
+
+    setSuccess(null)
+    showToast({
+      variant: 'success',
+      title: 'Employee account created',
+      description: res.message ?? 'Activation email sent.',
+    })
   }
 
   const resendActivation = async () => {
@@ -99,11 +105,16 @@ export default function EmployeeListPage() {
       setSuccess(null)
       const res = await employeeService.resendActivation(activationFollowUp.employeeId)
       setActivationFollowUp(null)
-      setSuccess(
-        res.activationLink
-          ? `${res.message ?? 'Activation email sent.'} Activation link: ${res.activationLink}`
-          : res.message ?? `Activation email sent to ${activationFollowUp.email}.`
-      )
+      if (res.activationLink) {
+        setSuccess(`${res.message ?? 'Activation email sent.'} Activation link: ${res.activationLink}`)
+        return
+      }
+
+      showToast({
+        variant: 'success',
+        title: 'Activation email sent',
+        description: res.message ?? `Sent to ${activationFollowUp.email}.`,
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to resend activation email.')
     } finally {
@@ -122,7 +133,6 @@ export default function EmployeeListPage() {
         search: search || undefined,
         status: statusFilter || undefined,
         includeFormer: statusFilter !== 'active',
-        includeArchived,
       })
       const allEmployees = [...firstPage.data]
 
@@ -133,7 +143,6 @@ export default function EmployeeListPage() {
           search: search || undefined,
           status: statusFilter || undefined,
           includeFormer: statusFilter !== 'active',
-          includeArchived,
         })
         allEmployees.push(...res.data)
       }
@@ -197,7 +206,7 @@ export default function EmployeeListPage() {
       )}
 
       {success && (
-        <FeedbackMessage variant="success">
+        <FeedbackMessage variant="info">
           {success}
         </FeedbackMessage>
       )}
@@ -257,24 +266,13 @@ export default function EmployeeListPage() {
             className="md:w-48"
           >
             <option value="active">Active employees</option>
-            <option value="all">All non-archived</option>
+            <option value="all">All</option>
             <option value="inactive">Inactive</option>
             <option value="resigned">Resigned</option>
             <option value="terminated">Terminated</option>
             <option value="end_of_contract">End of Contract</option>
+            <option value="archived">Archived</option>
           </Select>
-          <label className="flex items-center gap-2 text-sm text-ink">
-            <input
-              type="checkbox"
-              className="h-4 w-4 rounded border-border text-brand focus:ring-brand-200"
-              checked={includeArchived}
-              onChange={(event) => {
-                setIncludeArchived(event.target.checked)
-                setPage(1)
-              }}
-            />
-            Include archived
-          </label>
         </div>
 
         <Table

@@ -1,4 +1,5 @@
 import pool from '../utils/db'
+import { payrollEligibleEmployeeCondition } from '../services/payrollEmployeeEligibility'
 
 export type PayFrequency = 'weekly' | 'semi-monthly' | 'monthly'
 export type PayrollStatus =
@@ -101,15 +102,17 @@ export class PayrollPeriodModel {
     }
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+    const eligibilityCondition = payrollEligibleEmployeeCondition('e', 'pp')
 
     const [count, data] = await Promise.all([
       pool.query(`SELECT COUNT(*) FROM payroll_periods pp ${where}`, values),
       pool.query(
-        `WITH active_employees AS (
-           SELECT COUNT(*)::int AS active_employee_count
-           FROM employees
-           WHERE employment_status = 'active'
-             AND is_deleted = false
+        `WITH eligible_employees AS (
+           SELECT pp.id AS payroll_period_id,
+                  COUNT(e.id)::int AS active_employee_count
+           FROM payroll_periods pp
+           LEFT JOIN employees e ON ${eligibilityCondition}
+           GROUP BY pp.id
          ),
          summaries AS (
            SELECT payroll_period_id,
@@ -125,7 +128,7 @@ export class PayrollPeriodModel {
            GROUP BY payroll_period_id
          )
          SELECT pp.*,
-                ae.active_employee_count,
+                COALESCE(ee.active_employee_count, 0)::int AS active_employee_count,
                 COALESCE(s.record_count, 0)::int AS record_count,
                 COALESCE(s.processing_record_count, 0)::int AS processing_record_count,
                 COALESCE(s.approved_record_count, 0)::int AS approved_record_count,
@@ -135,7 +138,7 @@ export class PayrollPeriodModel {
                 COALESCE(s.total_net_pay, 0) AS total_net_pay,
                 COALESCE(s.negative_net_count, 0)::int AS negative_net_count
          FROM payroll_periods pp
-         CROSS JOIN active_employees ae
+         LEFT JOIN eligible_employees ee ON ee.payroll_period_id = pp.id
          LEFT JOIN summaries s ON s.payroll_period_id = pp.id
          ${where}
          ORDER BY pp.start_date DESC, pp.created_at DESC
@@ -151,12 +154,15 @@ export class PayrollPeriodModel {
   }
 
   static async findById(id: string) {
+    const eligibilityCondition = payrollEligibleEmployeeCondition('e', 'pp')
     const result = await pool.query(
-      `WITH active_employees AS (
-         SELECT COUNT(*)::int AS active_employee_count
-         FROM employees
-         WHERE employment_status = 'active'
-           AND is_deleted = false
+      `WITH eligible_employees AS (
+         SELECT pp.id AS payroll_period_id,
+                COUNT(e.id)::int AS active_employee_count
+         FROM payroll_periods pp
+         LEFT JOIN employees e ON ${eligibilityCondition}
+         WHERE pp.id = $1
+         GROUP BY pp.id
        ),
        summaries AS (
          SELECT payroll_period_id,
@@ -172,7 +178,7 @@ export class PayrollPeriodModel {
          GROUP BY payroll_period_id
        )
        SELECT pp.*,
-              ae.active_employee_count,
+              COALESCE(ee.active_employee_count, 0)::int AS active_employee_count,
               COALESCE(s.record_count, 0)::int AS record_count,
               COALESCE(s.processing_record_count, 0)::int AS processing_record_count,
               COALESCE(s.approved_record_count, 0)::int AS approved_record_count,
@@ -182,7 +188,7 @@ export class PayrollPeriodModel {
               COALESCE(s.total_net_pay, 0) AS total_net_pay,
               COALESCE(s.negative_net_count, 0)::int AS negative_net_count
        FROM payroll_periods pp
-       CROSS JOIN active_employees ae
+       LEFT JOIN eligible_employees ee ON ee.payroll_period_id = pp.id
        LEFT JOIN summaries s ON s.payroll_period_id = pp.id
        WHERE pp.id = $1`,
       [id]

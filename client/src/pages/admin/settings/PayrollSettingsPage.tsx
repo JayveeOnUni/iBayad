@@ -6,6 +6,7 @@ import Button from '../../../components/ui/Button'
 import Input from '../../../components/ui/Input'
 import Select from '../../../components/ui/Select'
 import { FeedbackMessage, PageHeader } from '../../../components/ui/Page'
+import { useToast } from '../../../components/ui/Toast'
 import { settingsService } from '../../../services/settingsService'
 import type { PayrollSettings } from '../../../types'
 
@@ -53,6 +54,7 @@ const wholeDayValidation = {
 }
 
 export default function PayrollSettingsPage() {
+  const { showToast } = useToast()
   const [message, setMessage] = useState<PageMessage | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
@@ -101,7 +103,7 @@ export default function PayrollSettingsPage() {
     try {
       const savedSettings = await settingsService.updatePayroll(data)
       reset({ ...defaultSettings, ...savedSettings })
-      setMessage({ variant: 'success', text: 'Payroll settings saved.' })
+      showToast({ variant: 'success', title: 'Payroll settings saved' })
     } catch (err) {
       const fieldErrors = extractServerFieldErrors(err)
       Object.entries(fieldErrors).forEach(([field, errorMessage]) => {

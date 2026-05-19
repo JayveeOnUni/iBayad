@@ -6,6 +6,7 @@ import { processBatchPayroll } from '../services/payrollService'
 import { buildPayrollValidationReport } from '../services/payrollValidationService'
 import { computeGovernmentDeductionsForPeriod, listStatutoryRuleVersions } from '../utils/statutoryDeductions'
 import { hasPayrollPermission } from '../middleware/auth'
+import { getPayrollSettings, type PayrollSettings } from '../services/settingsService'
 import {
   buildPayslipPayload,
   buildPayrollReport,
@@ -13,6 +14,7 @@ import {
   reportToCsv,
   type PayrollReportType,
 } from '../services/payrollReportingService'
+import { payrollComputationEndExpression, payrollEligibleEmployeeCondition } from '../services/payrollEmployeeEligibility'
 
 const payrollStatuses = [
   'draft',
@@ -49,6 +51,13 @@ interface CreatePeriodInput {
   endDate: string
   payDate: string
   payFrequency: PayFrequency
+}
+
+type PayrollPeriodSelection = 'first' | 'second'
+
+interface GeneratePeriodInput {
+  month: string
+  period: PayrollPeriodSelection
 }
 
 interface EnrichedPeriodRow extends Record<string, unknown> {
@@ -169,6 +178,99 @@ function normalizeCreatePeriodInput(body: Record<string, unknown>): CreatePeriod
   return { name, startDate, endDate, payDate, payFrequency }
 }
 
+function normalizeGeneratePeriodInput(body: Record<string, unknown>): GeneratePeriodInput {
+  const month = String(body.month ?? '').trim()
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+    throw createError('month must use YYYY-MM format', 400)
+  }
+
+  const period = String(body.period ?? '').trim()
+  if (period !== 'first' && period !== 'second') {
+    throw createError('period must be first or second', 400)
+  }
+
+  return { month, period }
+}
+
+function daysInUtcMonth(year: number, monthIndex: number): number {
+  return new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate()
+}
+
+function isoDateFromParts(year: number, monthIndex: number, day: number): string {
+  const clampedDay = Math.min(day, daysInUtcMonth(year, monthIndex))
+  return new Date(Date.UTC(year, monthIndex, clampedDay)).toISOString().slice(0, 10)
+}
+
+function parseConfiguredDay(value: unknown, label: string): number {
+  const day = Number(value)
+  if (!Number.isInteger(day) || day < 1 || day > 31) {
+    throw createError(`${label} must be a whole number from 1 to 31`, 400)
+  }
+  return day
+}
+
+const payrollMonthNames = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+]
+
+export function buildGeneratedPayrollPeriodInput(
+  settings: PayrollSettings,
+  input: GeneratePeriodInput
+): CreatePeriodInput {
+  const payFrequency = normalizePayFrequency(settings.payFrequency)
+  if (payFrequency !== 'semi-monthly') {
+    throw createError('Payroll period generation requires semi-monthly payroll settings', 400)
+  }
+
+  const cutoff1 = parseConfiguredDay(settings.semiMonthlyCutoff1, 'semiMonthlyCutoff1')
+  const cutoff2 = parseConfiguredDay(settings.semiMonthlyCutoff2, 'semiMonthlyCutoff2')
+  const payDay1 = parseConfiguredDay(settings.semiMonthlyPayDay1, 'semiMonthlyPayDay1')
+  const payDay2 = parseConfiguredDay(settings.semiMonthlyPayDay2, 'semiMonthlyPayDay2')
+  if (cutoff1 >= cutoff2) {
+    throw createError('semiMonthlyCutoff1 must be less than semiMonthlyCutoff2', 400)
+  }
+
+  const [yearText, monthText] = input.month.split('-')
+  const year = Number(yearText)
+  const monthIndex = Number(monthText) - 1
+  const label = `${payrollMonthNames[monthIndex]} ${year} - ${input.period === 'first' ? '1st' : '2nd'} Period`
+
+  if (input.period === 'first') {
+    return {
+      name: label,
+      startDate: isoDateFromParts(year, monthIndex, 1),
+      endDate: isoDateFromParts(year, monthIndex, cutoff1),
+      payDate: isoDateFromParts(year, monthIndex, payDay1),
+      payFrequency,
+    }
+  }
+
+  const startDate = isoDateFromParts(year, monthIndex, cutoff1 + 1)
+  const endDate = isoDateFromParts(year, monthIndex, cutoff2)
+  const sameMonthPayDate = isoDateFromParts(year, monthIndex, payDay2)
+  const nextMonthDate = new Date(Date.UTC(year, monthIndex + 1, 1))
+  const nextMonthPayDate = isoDateFromParts(nextMonthDate.getUTCFullYear(), nextMonthDate.getUTCMonth(), payDay2)
+
+  return {
+    name: label,
+    startDate,
+    endDate,
+    payDate: sameMonthPayDate <= endDate ? nextMonthPayDate : sameMonthPayDate,
+    payFrequency,
+  }
+}
+
 function enrichPeriodRow(row: Record<string, unknown>): EnrichedPeriodRow {
   return {
     ...row,
@@ -233,13 +335,12 @@ function buildPeriodFilters(req: Request): PeriodFilters {
 }
 
 async function getPeriodSummary(periodId: string, db: Queryable = pool) {
+  const eligibilityCondition = payrollEligibleEmployeeCondition('e', 'pp')
   const result = await db.query(
     `SELECT
        (SELECT COUNT(*)
         FROM employees e
-        WHERE e.employment_status = 'active'
-          AND e.is_deleted = false
-          AND e.hire_date <= pp.end_date)::int AS active_employee_count,
+        WHERE ${eligibilityCondition})::int AS active_employee_count,
        COUNT(pr.id) FILTER (WHERE pr.status::text NOT IN ('cancelled', 'voided'))::int AS record_count,
        COUNT(pr.id) FILTER (WHERE pr.status IN ('processing', 'processed', 'validation_failed', 'ready_for_approval', 'needs_correction'))::int AS processing_record_count,
        COUNT(pr.id) FILTER (WHERE pr.status = 'approved')::int AS approved_record_count,
@@ -270,6 +371,7 @@ async function getPeriodSummary(periodId: string, db: Queryable = pool) {
 }
 
 async function findPeriodRowById(periodId: string, db: Queryable = pool) {
+  const eligibilityCondition = payrollEligibleEmployeeCondition('e', 'pp')
   const result = await db.query(
     `WITH summaries AS (
        SELECT payroll_period_id,
@@ -288,9 +390,7 @@ async function findPeriodRowById(periodId: string, db: Queryable = pool) {
             COALESCE((
               SELECT COUNT(*)::int
               FROM employees e
-              WHERE e.employment_status = 'active'
-                AND e.is_deleted = false
-                AND e.hire_date <= pp.end_date
+              WHERE ${eligibilityCondition}
             ), 0) AS active_employee_count,
             COALESCE(s.record_count, 0)::int AS record_count,
             COALESCE(s.processing_record_count, 0)::int AS processing_record_count,
@@ -323,6 +423,8 @@ async function findPeriodRowById(periodId: string, db: Queryable = pool) {
 }
 
 async function countMissingAttendanceRows(period: Record<string, unknown>): Promise<number> {
+  const eligibilityCondition = payrollEligibleEmployeeCondition('e', 'pp')
+  const computationEndExpression = payrollComputationEndExpression('e', 'pp')
   const result = await pool.query(
     `WITH work_dates AS (
        SELECT day::date AS work_date
@@ -332,11 +434,11 @@ async function countMissingAttendanceRows(period: Record<string, unknown>): Prom
      expected AS (
        SELECT e.id AS employee_id, wd.work_date
        FROM employees e
+       JOIN payroll_periods pp ON pp.id = $3
        CROSS JOIN work_dates wd
-       WHERE e.employment_status = 'active'
-         AND e.is_deleted = false
-         AND e.hire_date <= $2::date
+       WHERE ${eligibilityCondition}
          AND wd.work_date >= GREATEST(e.hire_date, $1::date)
+         AND wd.work_date <= ${computationEndExpression}
      )
      SELECT COUNT(*)::int AS missing_count
      FROM expected ex
@@ -344,7 +446,7 @@ async function countMissingAttendanceRows(period: Record<string, unknown>): Prom
        ON a.employee_id = ex.employee_id
       AND a.date = ex.work_date
      WHERE a.id IS NULL`,
-    [dateOnly(period.start_date), dateOnly(period.end_date)]
+    [dateOnly(period.start_date), dateOnly(period.end_date), String(period.id)]
   )
   return toInt(result.rows[0]?.missing_count)
 }
@@ -389,7 +491,7 @@ async function getPeriodWarnings(period: ReturnType<typeof enrichPeriodRow>): Pr
     warnings.push({
       code: 'no_active_employees',
       severity: 'danger',
-      message: 'No active employees are available for this payroll run.',
+      message: 'No payroll-eligible employees are available for this payroll run.',
     })
   }
 
@@ -398,7 +500,7 @@ async function getPeriodWarnings(period: ReturnType<typeof enrichPeriodRow>): Pr
       code: 'missing_payroll_records',
       severity: 'danger',
       count: missingRecordCount,
-      message: `${missingRecordCount} active employee${missingRecordCount === 1 ? '' : 's'} do not have payroll records in this period.`,
+      message: `${missingRecordCount} payroll-eligible employee${missingRecordCount === 1 ? '' : 's'} do not have payroll records in this period.`,
     })
   }
 
@@ -616,6 +718,7 @@ export const getPayrollPeriods = asyncHandler(async (req: Request, res: Response
   const limit = parsePositiveInt(req.query.limit, 10, 100)
   const offset = (page - 1) * limit
   const { where, values } = buildPeriodFilters(req)
+  const eligibilityCondition = payrollEligibleEmployeeCondition('e', 'pp')
 
   const [countResult, dataResult] = await Promise.all([
     pool.query(`SELECT COUNT(*)::int AS total FROM payroll_periods pp ${where}`, values),
@@ -637,9 +740,7 @@ export const getPayrollPeriods = asyncHandler(async (req: Request, res: Response
               COALESCE((
                 SELECT COUNT(*)::int
                 FROM employees e
-       WHERE e.employment_status = 'active'
-         AND e.is_deleted = false
-                  AND e.hire_date <= pp.end_date
+                WHERE ${eligibilityCondition}
               ), 0) AS active_employee_count,
               COALESCE(s.record_count, 0)::int AS record_count,
               COALESCE(s.processing_record_count, 0)::int AS processing_record_count,
@@ -704,6 +805,20 @@ export const getPayrollPeriodById = asyncHandler(async (req: Request, res: Respo
       warning_count: warnings.length,
       warnings,
       audit_history: auditHistory,
+    },
+  })
+})
+
+export const getPayrollPeriodGenerationSettings = asyncHandler(async (_req: Request, res: Response) => {
+  const settings = await getPayrollSettings()
+  res.json({
+    success: true,
+    data: {
+      payFrequency: settings.payFrequency,
+      semiMonthlyCutoff1: settings.semiMonthlyCutoff1,
+      semiMonthlyCutoff2: settings.semiMonthlyCutoff2,
+      semiMonthlyPayDay1: settings.semiMonthlyPayDay1,
+      semiMonthlyPayDay2: settings.semiMonthlyPayDay2,
     },
   })
 })
@@ -779,8 +894,7 @@ export const validatePayrollPeriod = asyncHandler(async (req: Request, res: Resp
   }
 })
 
-export const createPayrollPeriod = asyncHandler(async (req: Request, res: Response) => {
-  const input = normalizeCreatePeriodInput(req.body)
+async function createPayrollPeriodFromInput(req: Request, input: CreatePeriodInput) {
   const client = await pool.connect()
 
   try {
@@ -833,14 +947,27 @@ export const createPayrollPeriod = asyncHandler(async (req: Request, res: Respon
 
     await client.query('COMMIT')
 
-    const data = await findPeriodRowById(period.id)
-    res.status(201).json({ success: true, data, message: 'Payroll period created.' })
+    return findPeriodRowById(period.id)
   } catch (err) {
     await client.query('ROLLBACK')
     throw err
   } finally {
     client.release()
   }
+}
+
+export const createPayrollPeriod = asyncHandler(async (req: Request, res: Response) => {
+  const input = normalizeCreatePeriodInput(req.body)
+  const data = await createPayrollPeriodFromInput(req, input)
+  res.status(201).json({ success: true, data, message: 'Payroll period created.' })
+})
+
+export const generatePayrollPeriod = asyncHandler(async (req: Request, res: Response) => {
+  const input = normalizeGeneratePeriodInput(req.body)
+  const settings = await getPayrollSettings()
+  const periodInput = buildGeneratedPayrollPeriodInput(settings, input)
+  const data = await createPayrollPeriodFromInput(req, periodInput)
+  res.status(201).json({ success: true, data, message: 'Payroll period created.' })
 })
 
 export const getPayrollRecords = asyncHandler(async (req: Request, res: Response) => {
@@ -1186,7 +1313,7 @@ export const processPayroll = asyncHandler(async (req: Request, res: Response) =
 
     const summaryBefore = await getPeriodSummary(payrollPeriodId, client)
     if (summaryBefore.activeEmployeeCount === 0) {
-      throw createError('No active employees are available for this payroll run', 400)
+      throw createError('No payroll-eligible employees are available for this payroll run', 400)
     }
     const existingRecords = await client.query(
       `SELECT COUNT(*)::int AS count

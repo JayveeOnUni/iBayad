@@ -8,6 +8,7 @@ import Modal, { ConfirmModal } from '../../../components/ui/Modal'
 import Input from '../../../components/ui/Input'
 import Select from '../../../components/ui/Select'
 import { EmptyState, FeedbackMessage } from '../../../components/ui/Page'
+import { useToast } from '../../../components/ui/Toast'
 import { holidayService, type HolidayPayload } from '../../../services/holidayService'
 import { formatDate } from '../../../utils/dateHelpers'
 import type { Holiday, HolidayType } from '../../../types'
@@ -152,6 +153,7 @@ function sortHolidays(items: Holiday[]): Holiday[] {
 }
 
 export default function HolidaysPage() {
+  const { showToast } = useToast()
   const currentYear = new Date().getFullYear()
   const [year, setYear] = useState(currentYear)
   const [holidays, setHolidays] = useState<Holiday[]>([])
@@ -244,7 +246,7 @@ export default function HolidaysPage() {
         )
       }
 
-      setMessage({ variant: 'success', text: editingHoliday ? 'Holiday updated.' : 'Holiday created.' })
+      showToast({ variant: 'success', title: editingHoliday ? 'Holiday updated' : 'Holiday created' })
       setIsModalOpen(false)
     } catch (err) {
       setMessage({ variant: 'danger', text: err instanceof Error ? err.message : 'Unable to save holiday.' })
@@ -267,7 +269,7 @@ export default function HolidaysPage() {
     try {
       const result = await holidayService.delete(holidayPendingDelete.id)
       setHolidays((current) => current.filter((item) => item.id !== result.deletedHolidayId))
-      setMessage({ variant: 'success', text: 'Holiday deleted.' })
+      showToast({ variant: 'success', title: 'Holiday deleted' })
       setHolidayPendingDelete(null)
     } catch (err) {
       setMessage({ variant: 'danger', text: err instanceof Error ? err.message : 'Unable to delete holiday.' })

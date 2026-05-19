@@ -7,6 +7,7 @@ import type { EmployeeDashboardData } from '../../types'
 import Card, { CardHeader } from '../../components/ui/Card'
 import Table from '../../components/ui/Table'
 import { EmptyState, FeedbackMessage, Page, PageHeader } from '../../components/ui/Page'
+import { useToast } from '../../components/ui/Toast'
 
 interface ProgressBarProps {
   percent: number
@@ -63,11 +64,11 @@ const leaveTypePriority = new Map([
 const coreLeaveTypeCodes = new Set(leaveTypePriority.keys())
 
 export default function EmployeeDashboardPage() {
+  const { showToast } = useToast()
   const [dashboard, setDashboard] = useState<EmployeeDashboardData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [punchAction, setPunchAction] = useState<'in' | 'out' | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [message, setMessage] = useState<string | null>(null)
 
   const loadDashboard = useCallback(async (mode: 'initial' | 'refresh' = 'refresh') => {
     if (mode === 'initial') setIsLoading(true)
@@ -90,20 +91,18 @@ export default function EmployeeDashboardPage() {
   const punch = async (action: 'in' | 'out') => {
     try {
       setPunchAction(action)
-      setMessage(null)
       setError(null)
 
       if (action === 'in') {
         await attendanceService.clockIn()
-        setMessage('Time in recorded.')
+        showToast({ variant: 'success', title: 'Time in recorded' })
       } else {
         await attendanceService.clockOut()
-        setMessage('Time out recorded.')
+        showToast({ variant: 'success', title: 'Time out recorded' })
       }
 
       await loadDashboard('refresh')
     } catch (err) {
-      setMessage(null)
       setError(err instanceof Error ? err.message : 'Unable to update attendance.')
     } finally {
       setPunchAction(null)
@@ -170,12 +169,6 @@ export default function EmployeeDashboardPage() {
             <span>{error}</span>
           </FeedbackMessage>
         )}
-        {message && (
-          <FeedbackMessage variant="success">
-            {message}
-          </FeedbackMessage>
-        )}
-
         <Card>
           <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
             <div>

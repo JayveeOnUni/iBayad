@@ -163,6 +163,7 @@ interface LeavePolicySettingsRow {
   leave_type_id: string
   leave_type_code: string
   leave_type_name: string
+  leave_type_is_statutory: boolean | null
   effective_date: string | Date
   employment_status: string
   entitlement_days: string | number | null
@@ -315,7 +316,7 @@ function leavePolicyRowToSettings(row: LeavePolicySettingsRow): LeavePolicySetti
     cashConversionLimit: dbNullableNumber(row.cash_conversion_limit),
     forfeitureRule: row.forfeiture_rule,
     notes: row.notes,
-    isProtected: isProtectedLeaveCode(code),
+    isProtected: isProtectedLeaveCode(code) || dbBoolean(row.leave_type_is_statutory),
   }
 }
 
@@ -562,6 +563,7 @@ async function readLeavePolicySettings(): Promise<LeavePolicySettings[]> {
             lp.leave_type_id,
             lt.code AS leave_type_code,
             lt.name AS leave_type_name,
+            COALESCE(lt.is_statutory, false) AS leave_type_is_statutory,
             lp.effective_date,
             lp.employment_status,
             lp.entitlement_days,
@@ -711,34 +713,11 @@ function leavePolicySettingsEqual(left: LeavePolicySettings | undefined, right: 
 }
 
 function protectedLeaveTypeChanged(current: LeaveTypeSettings, next: LeaveTypeSettings): boolean {
-  return current.code !== next.code ||
-    current.name !== next.name ||
-    !nullableNumbersEqual(current.daysPerYear, next.daysPerYear) ||
-    current.isPaid !== next.isPaid ||
-    current.isAccrualBased !== next.isAccrualBased ||
-    current.requiresBalance !== next.requiresBalance ||
-    current.appliesToProbationary !== next.appliesToProbationary ||
-    current.appliesToRegular !== next.appliesToRegular ||
-    !nullableNumbersEqual(current.maxDaysPerRequest, next.maxDaysPerRequest) ||
-    current.filingDeadlineDays !== next.filingDeadlineDays ||
-    current.filingDeadlineType !== next.filingDeadlineType ||
-    current.requiresDocument !== next.requiresDocument ||
-    current.isCashConvertible !== next.isCashConvertible ||
-    current.isCarryOverAllowed !== next.isCarryOverAllowed ||
-    current.isStatutory !== next.isStatutory ||
-    current.dayCountType !== next.dayCountType ||
-    current.isActive !== next.isActive
+  return !leaveTypeSettingsEqual(current, next)
 }
 
 function protectedPolicyChanged(current: LeavePolicySettings, next: LeavePolicySettings): boolean {
-  return current.leaveTypeId !== next.leaveTypeId ||
-    current.leaveTypeCode !== next.leaveTypeCode ||
-    current.effectiveDate !== next.effectiveDate ||
-    current.employmentStatus !== next.employmentStatus ||
-    !nullableNumbersEqual(current.entitlementDays, next.entitlementDays) ||
-    !nullableNumbersEqual(current.monthlyCredit, next.monthlyCredit) ||
-    !nullableNumbersEqual(current.carryOverLimit, next.carryOverLimit) ||
-    !nullableNumbersEqual(current.cashConversionLimit, next.cashConversionLimit)
+  return !leavePolicySettingsEqual(current, next)
 }
 
 function validateLeaveTypeInput(

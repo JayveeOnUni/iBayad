@@ -85,7 +85,9 @@ export class EmployeeModel {
       paramIdx++
     }
 
-    if (params.status && params.status !== 'all') {
+    if (params.status === 'archived') {
+      conditions.push(`e.is_deleted = true`)
+    } else if (params.status && params.status !== 'all') {
       conditions.push(`e.employment_status = $${paramIdx}`)
       values.push(params.status)
       paramIdx++
@@ -93,7 +95,7 @@ export class EmployeeModel {
       conditions.push(`e.employment_status = 'active'`)
     }
 
-    if (!params.includeArchived) {
+    if (params.status !== 'archived' && !params.includeArchived) {
       conditions.push(`e.is_deleted = false`)
     }
 

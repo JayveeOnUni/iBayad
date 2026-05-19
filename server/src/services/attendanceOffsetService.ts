@@ -294,7 +294,7 @@ export async function syncPendingOffsetCredit(attendanceId: string, actorUserId?
         `INSERT INTO offset_credits (
            employee_id, attendance_id, date_earned, source, minutes_earned, minutes_remaining,
            status, reason, reviewed_by, reviewed_at, created_by
-         ) VALUES ($1, $2, $3, 'excess_hours', $4, $4, $5::offset_credit_status, $6, $7, CASE WHEN $5 = 'approved' THEN NOW() ELSE NULL END, $7)`,
+         ) VALUES ($1, $2, $3, 'excess_hours', $4, $4, $5::offset_credit_status, $6, $7, CASE WHEN $5::offset_credit_status = 'approved'::offset_credit_status THEN NOW() ELSE NULL END, $7)`,
         [
           attendance.employee_id,
           attendanceId,
@@ -314,8 +314,8 @@ export async function syncPendingOffsetCredit(attendanceId: string, actorUserId?
          SET minutes_earned = $2,
              minutes_remaining = $2,
              status = $3::offset_credit_status,
-             reviewed_by = CASE WHEN $3 = 'approved' THEN $4 ELSE reviewed_by END,
-             reviewed_at = CASE WHEN $3 = 'approved' THEN NOW() ELSE reviewed_at END,
+             reviewed_by = CASE WHEN $3::offset_credit_status = 'approved'::offset_credit_status THEN $4 ELSE reviewed_by END,
+             reviewed_at = CASE WHEN $3::offset_credit_status = 'approved'::offset_credit_status THEN NOW() ELSE reviewed_at END,
              updated_at = NOW()
          WHERE id = $1`,
         [existing.rows[0].id, minutes, status, actorUserId ?? null]
@@ -388,8 +388,8 @@ export async function reviewOffsetCredit(
   const status = action === 'approve' ? 'approved' : 'rejected'
   const result = await pool.query(
     `UPDATE offset_credits
-     SET status = $2,
-         minutes_remaining = CASE WHEN $2 = 'approved' THEN minutes_earned ELSE 0 END,
+     SET status = $2::offset_credit_status,
+         minutes_remaining = CASE WHEN $2::offset_credit_status = 'approved'::offset_credit_status THEN minutes_earned ELSE 0 END,
          reviewed_by = $3,
          reviewed_at = NOW(),
          review_remarks = $4,

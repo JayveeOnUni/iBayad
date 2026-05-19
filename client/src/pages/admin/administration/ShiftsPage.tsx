@@ -6,6 +6,7 @@ import Badge from '../../../components/ui/Badge'
 import Modal, { ConfirmModal } from '../../../components/ui/Modal'
 import Input from '../../../components/ui/Input'
 import { EmptyState, FeedbackMessage } from '../../../components/ui/Page'
+import { useToast } from '../../../components/ui/Toast'
 import { shiftService, type ShiftPayload } from '../../../services/referenceDataService'
 import type { Shift } from '../../../types'
 
@@ -152,6 +153,7 @@ function validateShiftForm(form: ShiftForm): { payload?: ShiftPayload; errors: S
 }
 
 export default function ShiftsPage() {
+  const { showToast } = useToast()
   const [shifts, setShifts] = useState<Shift[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isModalOpen, setIsModalOpen] = useState(false)
@@ -217,7 +219,7 @@ export default function ShiftsPage() {
           ? current.map((item) => item.id === savedShift.id ? savedShift : item)
           : [savedShift, ...current]
       )
-      setMessage({ variant: 'success', text: editingShift ? 'Shift updated.' : 'Shift created.' })
+      showToast({ variant: 'success', title: editingShift ? 'Shift updated' : 'Shift created' })
       setIsModalOpen(false)
     } catch (err) {
       setMessage({ variant: 'danger', text: err instanceof Error ? err.message : 'Unable to save shift.' })
@@ -233,7 +235,7 @@ export default function ShiftsPage() {
     try {
       const updatedShift = await shiftService.toggleActive(shift.id)
       setShifts((current) => current.map((item) => item.id === updatedShift.id ? updatedShift : item))
-      setMessage({ variant: 'success', text: `Shift ${updatedShift.isActive ? 'activated' : 'deactivated'}.` })
+      showToast({ variant: 'success', title: `Shift ${updatedShift.isActive ? 'activated' : 'deactivated'}` })
     } catch (err) {
       setMessage({ variant: 'danger', text: err instanceof Error ? err.message : 'Unable to update shift status.' })
     } finally {
@@ -260,7 +262,7 @@ export default function ShiftsPage() {
         : `${result.reassignedEmployees} employees were reassigned to Regular Shift.`
 
       setShifts((current) => current.filter((item) => item.id !== result.deletedShiftId))
-      setMessage({ variant: 'success', text: `Shift deleted. ${reassignedText}` })
+      showToast({ variant: 'success', title: 'Shift deleted', description: reassignedText })
       setShiftPendingDelete(null)
     } catch (err) {
       setMessage({ variant: 'danger', text: err instanceof Error ? err.message : 'Unable to delete shift.' })

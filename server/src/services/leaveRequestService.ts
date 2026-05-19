@@ -6,6 +6,7 @@ import { LeaveAuditService } from './leaveAuditService'
 import { LeaveBalanceService } from './leaveBalanceService'
 import { LeavePayrollImpactService } from './leavePayrollImpactService'
 import { LeaveCode, LeavePolicyService, LeaveRequestInput } from './leavePolicyService'
+import { createError } from '../middleware/errorHandler'
 
 type Queryable = Pool | PoolClient
 
@@ -109,9 +110,7 @@ export class LeaveRequestService {
     const split = await this.computeDeductionSplit(input.employeeId, validation.leaveType, validation.totalDays, year)
 
     if (validation.leaveType.requires_balance && validation.leaveType.is_paid && split.unpaidDays > 0) {
-      const error = new Error(`Insufficient ${validation.leaveType.name.toLowerCase()} credits.`)
-      error.name = 'LeaveValidationError'
-      throw error
+      throw createError(`Insufficient ${validation.leaveType.name.toLowerCase()} credits.`, 400)
     }
 
     const result = await pool.query(
@@ -209,7 +208,7 @@ export class LeaveRequestService {
       requires_balance: existing.leave_type_requires_balance,
     }, Number(existing.total_days), year, { excludeLeaveRequestId: id, db })
     if (existing.leave_type_requires_balance && existing.leave_type_is_paid && split.unpaidDays > 0) {
-      throw new Error(`Insufficient ${existing.leave_type_name.toLowerCase()} credits.`)
+      throw createError(`Insufficient ${existing.leave_type_name.toLowerCase()} credits.`, 400)
     }
 
     const update = await db.query(

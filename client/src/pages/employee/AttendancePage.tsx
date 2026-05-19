@@ -7,6 +7,7 @@ import Modal from '../../components/ui/Modal'
 import Input from '../../components/ui/Input'
 import Textarea from '../../components/ui/Textarea'
 import { FeedbackMessage, PageHeader } from '../../components/ui/Page'
+import { useToast } from '../../components/ui/Toast'
 import { format, addMonths, subMonths, startOfMonth, endOfMonth, formatTime } from '../../utils/dateHelpers'
 import { attendanceService } from '../../services/attendanceService'
 import type { AttendanceRecord, OffsetBalance } from '../../types'
@@ -25,6 +26,7 @@ function minutesLabel(minutes: number) {
 }
 
 export default function AttendancePage() {
+  const { showToast } = useToast()
   const [currentMonth, setCurrentMonth] = useState(new Date())
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [isOffsetModalOpen, setIsOffsetModalOpen] = useState(false)
@@ -88,7 +90,11 @@ export default function AttendancePage() {
       })
       setIsModalOpen(false)
       setRequestForm({ date: new Date().toISOString().slice(0, 10), requestedTimeIn: '', requestedTimeOut: '', reason: '' })
-      setMessage('Attendance correction request submitted for review.')
+      showToast({
+        variant: 'success',
+        title: 'Attendance correction submitted',
+        description: 'Sent for review.',
+      })
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Unable to submit attendance request.')
     } finally {
@@ -109,7 +115,11 @@ export default function AttendancePage() {
       setOffsetForm({ usageDate: new Date().toISOString().slice(0, 10), requestedMinutes: 120, reason: '' })
       const balanceRes = await attendanceService.getMyOffsetBalance()
       setOffsetBalance(balanceRes.data)
-      setMessage('Time offset request submitted for review.')
+      showToast({
+        variant: 'success',
+        title: 'Time offset request submitted',
+        description: 'Sent for review.',
+      })
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Unable to submit time offset request.')
     } finally {

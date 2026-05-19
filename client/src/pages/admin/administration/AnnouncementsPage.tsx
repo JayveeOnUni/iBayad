@@ -7,6 +7,7 @@ import Modal, { ConfirmModal } from '../../../components/ui/Modal'
 import Input from '../../../components/ui/Input'
 import Textarea from '../../../components/ui/Textarea'
 import { EmptyState, FeedbackMessage } from '../../../components/ui/Page'
+import { useToast } from '../../../components/ui/Toast'
 import { announcementService, type AnnouncementPayload } from '../../../services/announcementService'
 import { formatDate } from '../../../utils/dateHelpers'
 import type { Announcement } from '../../../types'
@@ -122,6 +123,7 @@ function sortAnnouncements(items: Announcement[]): Announcement[] {
 }
 
 export default function AnnouncementsPage() {
+  const { showToast } = useToast()
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isModalOpen, setIsModalOpen] = useState(false)
@@ -188,7 +190,7 @@ export default function AnnouncementsPage() {
             : [savedAnnouncement, ...current]
         )
       )
-      setMessage({ variant: 'success', text: editingAnnouncement ? 'Announcement updated.' : 'Announcement created.' })
+      showToast({ variant: 'success', title: editingAnnouncement ? 'Announcement updated' : 'Announcement created' })
       setIsModalOpen(false)
     } catch (err) {
       setMessage({ variant: 'danger', text: err instanceof Error ? err.message : 'Unable to save announcement.' })
@@ -211,7 +213,7 @@ export default function AnnouncementsPage() {
     try {
       const result = await announcementService.delete(announcementPendingDelete.id)
       setAnnouncements((current) => current.filter((item) => item.id !== result.deletedAnnouncementId))
-      setMessage({ variant: 'success', text: 'Announcement deleted.' })
+      showToast({ variant: 'success', title: 'Announcement deleted' })
       setAnnouncementPendingDelete(null)
     } catch (err) {
       setMessage({ variant: 'danger', text: err instanceof Error ? err.message : 'Unable to delete announcement.' })

@@ -179,15 +179,19 @@ export const rejectLeaveRequest = asyncHandler(async (req: Request, res: Respons
 export const reviewLeaveRequest = asyncHandler(async (req: Request, res: Response) => {
   assertLeaveAdmin(req)
   const action = String(req.body.action ?? '')
-  if (action === 'approve') {
-    const data = await LeaveApprovalService.approve(req.params.id, actor(req), req.body.remarks)
-    res.json({ success: true, data })
-    return
-  }
-  if (action === 'reject') {
-    const data = await LeaveApprovalService.reject(req.params.id, actor(req), String(req.body.remarks ?? ''))
-    res.json({ success: true, data })
-    return
+  try {
+    if (action === 'approve') {
+      const data = await LeaveApprovalService.approve(req.params.id, actor(req), req.body.remarks)
+      res.json({ success: true, data })
+      return
+    }
+    if (action === 'reject') {
+      const data = await LeaveApprovalService.reject(req.params.id, actor(req), String(req.body.remarks ?? ''))
+      res.json({ success: true, data })
+      return
+    }
+  } catch (error) {
+    throw operationalError(error, error instanceof Error && error.message.includes('not found') ? 404 : 400)
   }
   throw createError('action must be approve or reject', 400)
 })
