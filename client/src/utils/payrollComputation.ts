@@ -3,7 +3,6 @@ import type { PayrollRecord } from '../types'
 export interface PayrollPreviewBreakdown {
   grossPay: number
   basicPay: number
-  overtimePay: number
   lateDeductions: number
   undertimeDeductions: number
   absenceDeductions: number
@@ -27,7 +26,6 @@ export function previewPayrollRecord(record: PayrollRecord): PayrollPreviewBreak
   return {
     grossPay: record.grossPay,
     basicPay: record.basicPay,
-    overtimePay: record.overtimePay,
     lateDeductions: record.lateDeduction,
     undertimeDeductions: record.undertimeDeduction,
     absenceDeductions: record.absenceDeduction,

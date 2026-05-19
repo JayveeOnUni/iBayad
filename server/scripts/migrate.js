@@ -99,6 +99,10 @@ const migrations = [
     name: '023_employee_account_lifecycle',
     file: 'src/db/add-employee-account-lifecycle.sql',
   },
+  {
+    name: '024_no_paid_overtime_offset_policy',
+    file: 'src/db/add-no-paid-overtime-offset-policy.sql',
+  },
 ]
 
 function resolveSqlFile(relativeFile) {

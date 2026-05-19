@@ -277,3 +277,59 @@ test('payroll computation treats loan deductions as zero', async () => {
   assert.equal(result.totalDeductions, withoutLoanResult.totalDeductions)
   assert.equal(result.netPay, withoutLoanResult.netPay)
 })
+
+test('payroll computation tracks extra time as offset without overtime pay', async () => {
+  const { computePayroll } = require('../src/services/payrollService') as typeof import('../src/services/payrollService')
+  const db = {
+    query: async () => {
+      throw new Error('Use statutory fallback rules')
+    },
+  }
+
+  const baseInput = {
+    employeeId,
+    payrollPeriodId: periodId,
+    basicSalary: 44000,
+    payFrequency: 'semi-monthly' as const,
+    periodEndDate: '2026-05-15',
+    expectedWorkDays: 11,
+    daysWorked: 11,
+    absenceDays: 0,
+    paidLeaveDays: 0,
+    unpaidLeaveDays: 0,
+    lateMins: 0,
+    overtimeHours: 0,
+    holidayHours: 0,
+    nightDiffHours: 0,
+    excessMinutes: 0,
+    offsetEarnedMinutes: 0,
+    offsetUsedMinutes: 0,
+    undertimeMinutes: 0,
+    offsetBalanceMinutes: 0,
+    allowances: 0,
+    otherEarnings: 0,
+    loanDeductions: 0,
+    loanDeductionItems: [],
+    otherDeductions: 0,
+    workDaysPerMonth: 22,
+    workHoursPerDay: 8,
+    regularHolidayRate: 2,
+    nightDifferentialEnabled: false,
+  }
+
+  const regular = await computePayroll(baseInput, db as never)
+  const extraTime = await computePayroll({
+    ...baseInput,
+    overtimeHours: 3,
+    excessMinutes: 180,
+    offsetEarnedMinutes: 180,
+    offsetBalanceMinutes: 180,
+  }, db as never)
+
+  assert.equal(extraTime.overtimePay, 0)
+  assert.equal(extraTime.offsetEarnedMinutes, 180)
+  assert.equal(extraTime.offsetBalanceMinutes, 180)
+  assert.equal(extraTime.grossPay, regular.grossPay)
+  assert.equal(extraTime.netPay, regular.netPay)
+  assert.equal((extraTime.computationBreakdown.earnings as Record<string, unknown>).paidOvertimeDisabled, true)
+})

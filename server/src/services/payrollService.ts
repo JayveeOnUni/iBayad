@@ -179,7 +179,7 @@ export async function computePayroll(input: PayrollInput, db: Queryable = pool):
 
   // Earnings
   const regularPay = Math.round(dailyRate * expectedWorkDays * 100) / 100
-  const overtimePay = Math.round(hourlyRate * input.overtimeHours * 1.25 * 100) / 100
+  const overtimePay = 0
   const holidayPay = round2(hourlyRate * input.holidayHours * regularHolidayRate)
   const nightDiffHours = nightDifferentialEnabled ? Math.max(0, input.nightDiffHours) : 0
   const nightDiffPay = round2(hourlyRate * nightDiffHours * 0.10)
@@ -246,6 +246,10 @@ export async function computePayroll(input: PayrollInput, db: Queryable = pool):
     earnings: {
       basicPay: regularPay,
       overtimePay,
+      paidOvertimeDisabled: true,
+      offsetEarnedMinutes: Math.round(input.offsetEarnedMinutes),
+      offsetUsedMinutes: Math.round(input.offsetUsedMinutes),
+      offsetBalanceMinutes: Math.round(input.offsetBalanceMinutes),
       holidayPay,
       nightDiffPay,
       paidLeaveAmount,
@@ -451,10 +455,18 @@ async function createPayrollCalculationSnapshot(
        COALESCE(SUM(CASE WHEN status = 'on_leave' THEN 1 ELSE 0 END), 0) AS leave_days,
        COALESCE(SUM(late_minutes), 0) AS late_minutes,
        COALESCE(SUM(undertime_minutes), 0) AS undertime_minutes,
-       COALESCE(SUM(overtime_hours), 0) AS overtime_hours,
+       0 AS overtime_hours,
        COALESCE(SUM(holiday_hours), 0) AS holiday_hours,
-       COALESCE(SUM(excess_minutes), 0) AS excess_minutes,
-       COALESCE(SUM(offset_earned_minutes), 0) AS offset_earned_minutes,
+       COALESCE(SUM(GREATEST(
+         COALESCE(excess_minutes, 0),
+         COALESCE(offset_earned_minutes, 0),
+         ROUND(COALESCE(overtime_hours, 0) * 60)::int
+       )), 0) AS excess_minutes,
+       COALESCE(SUM(GREATEST(
+         COALESCE(offset_earned_minutes, 0),
+         COALESCE(excess_minutes, 0),
+         ROUND(COALESCE(overtime_hours, 0) * 60)::int
+       )), 0) AS offset_earned_minutes,
        COALESCE(SUM(offset_used_minutes), 0) AS offset_used_minutes
      FROM attendance
      WHERE employee_id = $1
@@ -766,11 +778,19 @@ export async function processBatchPayroll(
             COALESCE(SUM(CASE WHEN a.status = 'on_leave' THEN 1 ELSE 0 END), 0) AS leave_attendance_days,
             COALESCE(SUM(CASE WHEN a.status = 'absent' THEN 1 ELSE 0 END), 0) AS absence_days,
             COALESCE(SUM(CASE WHEN a.status = 'late' THEN a.late_minutes ELSE 0 END), 0) AS late_mins,
-            COALESCE(SUM(a.overtime_hours), 0) AS overtime_hours,
+            0 AS overtime_hours,
             COALESCE(SUM(a.holiday_hours), 0) AS holiday_hours,
             ${nightDifferentialHoursExpression} AS night_diff_hours,
-            COALESCE(SUM(a.excess_minutes), 0) AS excess_minutes,
-            COALESCE(SUM(a.offset_earned_minutes), 0) AS offset_earned_minutes,
+            COALESCE(SUM(GREATEST(
+              COALESCE(a.excess_minutes, 0),
+              COALESCE(a.offset_earned_minutes, 0),
+              ROUND(COALESCE(a.overtime_hours, 0) * 60)::int
+            )), 0) AS excess_minutes,
+            COALESCE(SUM(GREATEST(
+              COALESCE(a.offset_earned_minutes, 0),
+              COALESCE(a.excess_minutes, 0),
+              ROUND(COALESCE(a.overtime_hours, 0) * 60)::int
+            )), 0) AS offset_earned_minutes,
             COALESCE(SUM(a.offset_used_minutes), 0) AS offset_used_minutes,
             COALESCE(SUM(a.undertime_minutes), 0) AS undertime_minutes,
             COALESCE((

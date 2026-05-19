@@ -75,7 +75,8 @@ export default function AttendancePage() {
   const absent = useMemo(() => attendance.filter((a) => a.status === 'absent').length, [attendance])
   const late = useMemo(() => attendance.filter((a) => a.status === 'late').length, [attendance])
   const offsetEarned = useMemo(() => attendance.reduce((sum, a) => sum + a.offsetEarnedMinutes, 0), [attendance])
-  const overtime = useMemo(() => attendance.reduce((sum, a) => sum + a.overtimeHours, 0), [attendance])
+  const offsetUsed = useMemo(() => attendance.reduce((sum, a) => sum + a.offsetUsedMinutes, 0), [attendance])
+  const undertime = useMemo(() => attendance.reduce((sum, a) => sum + a.undertimeMinutes, 0), [attendance])
 
   const submitCorrection = async () => {
     try {
@@ -173,14 +174,15 @@ export default function AttendancePage() {
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-7">
           {[
             { label: 'Days Present', value: present, color: 'text-success' },
             { label: 'Days Absent', value: absent, color: 'text-danger' },
             { label: 'Late Days', value: late, color: 'text-warning' },
-            { label: 'Overtime', value: `${overtime.toFixed(1)}h`, color: 'text-info' },
+            { label: 'Undertime', value: minutesLabel(undertime), color: 'text-warning' },
             { label: 'Offset Available', value: minutesLabel(offsetBalance?.availableMinutes ?? 0), color: 'text-brand' },
             { label: 'Offset Earned', value: minutesLabel(offsetEarned), color: 'text-info' },
+            { label: 'Offset Used', value: minutesLabel(offsetUsed), color: 'text-info' },
           ].map((s) => (
             <div key={s.label} className="rounded-lg bg-neutral-20 p-3 text-center">
               <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
@@ -216,9 +218,6 @@ export default function AttendancePage() {
                 )}
                 {a.offsetUsedMinutes > 0 && (
                   <span className="text-xs text-info font-medium">-{minutesLabel(a.offsetUsedMinutes)} used</span>
-                )}
-                {a.overtimeHours > 0 && (
-                  <span className="text-xs text-info font-medium">+{a.overtimeHours.toFixed(1)}h OT</span>
                 )}
                 <Badge variant={statusVariant[a.status]} dot>
                   {a.status}

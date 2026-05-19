@@ -274,7 +274,7 @@ Demo employee credentials:
 This seed creates `EMP-DEMO-2026-001` / `Mikaela Demo Reyes` with:
 
 - 30 April 2026 attendance rows
-- Working days, rest days, late records, undertime, overtime, and one absence
+- Working days, rest days, late records, undertime, offset credits, and one absence
 - A released `Demo April 2026 Full Month` payroll period and payslip-ready payroll record
 - Fake-only employee, government ID, bank, address, phone, and email data
 

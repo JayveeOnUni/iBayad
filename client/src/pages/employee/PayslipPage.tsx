@@ -20,7 +20,6 @@ type Filters = {
 
 const labelMap: Record<string, string> = {
   basicPay: 'Basic Pay',
-  overtimePay: 'Overtime Pay',
   holidayPay: 'Holiday Pay',
   nightDifferential: 'Night Differential',
   paidLeaveAmount: 'Paid Leave Amount',
@@ -44,10 +43,13 @@ const labelMap: Record<string, string> = {
   pagIbigEmployer: 'Pag-IBIG Employer Share',
   otherEmployerPaidBenefits: 'Other Employer-paid Benefits',
   totalEmployerContributions: 'Total Employer Contributions',
+  offsetEarnedMinutes: 'Offset Earned',
+  offsetUsedMinutes: 'Offset Used',
+  offsetBalanceMinutes: 'Remaining Offset',
 }
 
 function numberRows(values: Record<string, number>, emphasisKey?: string) {
-  return Object.entries(values).filter(([key]) => key !== 'loanDeductions').map(([key, value]) => (
+  return Object.entries(values).filter(([key]) => key !== 'loanDeductions' && key !== 'overtimePay').map(([key, value]) => (
     <div key={key} className="flex items-center justify-between border-b border-border py-2 text-sm last:border-0">
       <span className={key === emphasisKey ? 'font-semibold text-ink' : 'text-muted'}>{labelMap[key] ?? key}</span>
       <span className={key === emphasisKey ? 'font-semibold text-ink' : 'font-medium text-ink'}>{formatPeso(value)}</span>
@@ -275,7 +277,9 @@ export default function PayslipPage() {
                         {Object.entries(detail.attendance).map(([key, value]) => (
                           <div key={key} className="rounded-md border border-border px-3 py-2">
                             <p className="text-xs text-muted">{key.replace(/([A-Z])/g, ' $1')}</p>
-                            <p className="text-sm font-semibold text-ink">{key.toLowerCase().includes('deduction') ? formatPeso(value) : value}</p>
+                            <p className="text-sm font-semibold text-ink">
+                              {key.toLowerCase().includes('deduction') ? formatPeso(value) : value}
+                            </p>
                           </div>
                         ))}
                       </div>

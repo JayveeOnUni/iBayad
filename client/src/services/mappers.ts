@@ -127,6 +127,9 @@ export function mapProfileUpdateRequest(row: Row): ProfileUpdateRequest {
 
 export function mapAttendance(row: Row): AttendanceRecord {
   const minutes = num(row.total_worked_minutes ?? row.totalWorkedMinutes)
+  const legacyOvertimeMinutes = Math.round(num(row.overtime_hours ?? row.overtimeHours) * 60)
+  const excessMinutes = num(row.excess_minutes ?? row.excessMinutes)
+  const offsetEarnedMinutes = num(row.offset_earned_minutes ?? row.offsetEarnedMinutes)
   return {
     id: str(row.id),
     employeeId: str(row.employee_id ?? row.employeeId),
@@ -148,9 +151,9 @@ export function mapAttendance(row: Row): AttendanceRecord {
     requiredWorkMinutes: num(row.required_work_minutes ?? row.requiredWorkMinutes),
     actualRenderedMinutes: num(row.actual_rendered_minutes ?? row.actualRenderedMinutes, minutes),
     hoursWorked: num(row.hours_worked ?? row.hoursWorked, minutes ? minutes / 60 : 0),
-    overtimeHours: num(row.overtime_hours ?? row.overtimeHours),
-    excessMinutes: num(row.excess_minutes ?? row.excessMinutes),
-    offsetEarnedMinutes: num(row.offset_earned_minutes ?? row.offsetEarnedMinutes),
+    overtimeHours: 0,
+    excessMinutes: excessMinutes || legacyOvertimeMinutes,
+    offsetEarnedMinutes: offsetEarnedMinutes || excessMinutes || legacyOvertimeMinutes,
     offsetUsedMinutes: num(row.offset_used_minutes ?? row.offsetUsedMinutes),
     lateMinutes: num(row.late_minutes ?? row.lateMinutes),
     undertimeMinutes: num(row.undertime_minutes ?? row.undertimeMinutes),
@@ -532,7 +535,7 @@ export function mapPayrollRecord(row: Row): PayrollRecord {
     employeeId: str(row.employee_id ?? row.employeeId),
     employee: row.first_name ? mapEmployee(row) : undefined,
     basicPay: num(row.regular_pay ?? row.basic_pay ?? row.basic_salary),
-    overtimePay: num(row.overtime_pay),
+    overtimePay: 0,
     holidayPay: num(row.holiday_pay),
     nightDifferential: num(row.night_diff_pay ?? row.night_differential),
     thirteenthMonthPay: num(row.thirteenth_month_pay),
@@ -582,7 +585,7 @@ export function mapPayrollRecord(row: Row): PayrollRecord {
     computationBreakdown: withoutPayrollLoanBreakdown(row.computation_breakdown ?? row.computationBreakdown),
     daysWorked: num(row.days_worked),
     hoursWorked: num(row.hours_worked),
-    overtimeHours: num(row.overtime_hours),
+    overtimeHours: 0,
     absentDays: num(row.absent_days),
     lateDays: num(row.late_days),
     status: str(row.status, 'draft') as PayrollRecord['status'],

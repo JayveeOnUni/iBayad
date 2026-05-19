@@ -204,10 +204,14 @@ export const getEmployeeDashboard = asyncHandler(async (req: Request, res: Respo
          COUNT(*) FILTER (WHERE status = 'half_day') AS half_days,
          COUNT(*) FILTER (WHERE status = 'on_leave') AS leave_days,
          COALESCE(SUM(late_minutes), 0) AS late_minutes,
-         COALESCE(SUM(offset_earned_minutes), 0) AS offset_earned_minutes,
+         COALESCE(SUM(GREATEST(
+           COALESCE(offset_earned_minutes, 0),
+           COALESCE(excess_minutes, 0),
+           ROUND(COALESCE(overtime_hours, 0) * 60)::int
+         )), 0) AS offset_earned_minutes,
          COALESCE(SUM(offset_used_minutes), 0) AS offset_used_minutes,
          COALESCE(SUM(undertime_minutes), 0) AS undertime_minutes,
-         COALESCE(SUM(overtime_hours), 0) AS overtime_hours,
+         0 AS overtime_hours,
          COALESCE(SUM(total_worked_minutes), 0) AS worked_minutes
        FROM attendance
        WHERE employee_id = $1
@@ -276,7 +280,7 @@ export const getEmployeeDashboard = asyncHandler(async (req: Request, res: Respo
         offsetEarnedMinutes: Number(attendance?.offset_earned_minutes ?? 0),
         offsetUsedMinutes: Number(attendance?.offset_used_minutes ?? 0),
         excessMinutes: Number(attendance?.excess_minutes ?? 0),
-        overtimeHours: Number(attendance?.overtime_hours ?? 0),
+        overtimeHours: 0,
       },
       monthlyAttendance: {
         presentDays: Number(monthly.present_days ?? 0),
@@ -290,7 +294,7 @@ export const getEmployeeDashboard = asyncHandler(async (req: Request, res: Respo
         offsetEarnedHours: round(Number(monthly.offset_earned_minutes ?? 0) / 60),
         offsetUsedHours: round(offsetUsedHours),
         undertimeHours: round(Number(monthly.undertime_minutes ?? 0) / 60),
-        overtimeHours: round(Number(monthly.overtime_hours ?? 0)),
+        overtimeHours: 0,
         lateMinutes: Number(monthly.late_minutes ?? 0),
       },
       leaveBalance: {

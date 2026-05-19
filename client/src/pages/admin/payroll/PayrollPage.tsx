@@ -246,9 +246,13 @@ function prettyColumn(value: string) {
   return value.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
+function isMoneyColumn(key: string) {
+  return /(pay|deduction|tax|share|contribution|income|amount|gross|net|scheduled)/i.test(key) &&
+    !/(minutes|hours|days|count)/i.test(key)
+}
+
 function renderReportValue(key: string, value: unknown) {
-  const amountLike = /(pay|deduction|tax|share|contribution|income|amount|balance|gross|net|scheduled)/i.test(key)
-  if (amountLike && Number.isFinite(Number(value))) return formatPeso(Number(value))
+  if (isMoneyColumn(key) && Number.isFinite(Number(value))) return formatPeso(Number(value))
   if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10)
   return value == null || value === '' ? '—' : String(value)
 }
@@ -1195,7 +1199,7 @@ export default function PayrollPage() {
               {report && (
                 <div className="grid grid-cols-1 gap-3 border-b border-border px-5 py-4 sm:grid-cols-2 lg:grid-cols-4">
                   {Object.entries(report.totals)
-                    .filter(([key]) => /(pay|deduction|tax|share|contribution|income|amount|balance|gross|net|employee_count)/i.test(key))
+                    .filter(([key]) => isMoneyColumn(key) || key === 'employee_count')
                     .slice(0, 4)
                     .map(([key, value]) => (
                       <div key={key} className="rounded-md border border-border px-3 py-2">
@@ -1277,6 +1281,17 @@ export default function PayrollPage() {
                   render: (record) => (
                     <div className="text-sm">
                       <p className="text-danger">{formatPeso(record.leaveDeduction)} leave</p>
+                    </div>
+                  ),
+                },
+                {
+                  key: 'offset',
+                  header: 'Offset',
+                  render: (record) => (
+                    <div className="text-xs text-muted">
+                      <p className="text-brand">{record.offsetEarnedMinutes}m earned</p>
+                      <p>{record.offsetUsedMinutes}m used · {record.offsetBalanceMinutes}m balance</p>
+                      <p className="text-warning">{record.undertimeMinutes}m undertime</p>
                     </div>
                   ),
                 },

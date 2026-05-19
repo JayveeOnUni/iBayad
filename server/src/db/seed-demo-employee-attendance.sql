@@ -350,17 +350,17 @@ FROM (
     ('EMP-DEMO-006M', '2026-04-03'::date, 'late'::attendance_status,    '08:12'::time, '17:00'::time, 468, 12, 12, 0.00::numeric, 'Late by 12 minutes.'),
     ('EMP-DEMO-006M', '2026-04-21'::date, 'absent'::attendance_status,  NULL::time,    NULL::time,    0,   0,  0, 0.00::numeric, 'Unpaid demo absence.'),
     ('EMP-DEMO-006M', '2026-05-05'::date, 'present'::attendance_status, '08:00'::time, '16:30'::time, 450, 0, 30, 0.00::numeric, 'Undertime by 30 minutes.'),
-    ('EMP-DEMO-006M', '2026-05-12'::date, 'present'::attendance_status, '07:55'::time, '18:00'::time, 545, 0,  0, 1.00::numeric, 'One hour approved overtime.'),
+    ('EMP-DEMO-006M', '2026-05-12'::date, 'present'::attendance_status, '07:55'::time, '18:00'::time, 545, 0,  0, 0.00::numeric, 'Extra rendered time creates offset credit.'),
     ('EMP-DEMO-012M', '2026-04-06'::date, 'late'::attendance_status,    '08:18'::time, '17:00'::time, 462, 18, 18, 0.00::numeric, 'Late by 18 minutes.'),
-    ('EMP-DEMO-012M', '2026-04-30'::date, 'present'::attendance_status, '08:00'::time, '18:30'::time, 570, 0,  0, 1.50::numeric, 'One and a half hours approved overtime.'),
+    ('EMP-DEMO-012M', '2026-04-30'::date, 'present'::attendance_status, '08:00'::time, '18:30'::time, 570, 0,  0, 0.00::numeric, 'Extra rendered time creates offset credit.'),
     ('EMP-DEMO-012M', '2026-05-11'::date, 'absent'::attendance_status,  NULL::time,    NULL::time,    0,   0,  0, 0.00::numeric, 'Unpaid demo absence.'),
     ('EMP-DEMO-012M', '2026-05-14'::date, 'present'::attendance_status, '08:00'::time, '16:00'::time, 420, 0, 60, 0.00::numeric, 'Undertime by one hour.'),
-    ('EMP-DEMO-018M', '2026-04-10'::date, 'present'::attendance_status, '08:00'::time, '19:00'::time, 600, 0,  0, 2.00::numeric, 'Two hours approved overtime.'),
+    ('EMP-DEMO-018M', '2026-04-10'::date, 'present'::attendance_status, '08:00'::time, '19:00'::time, 600, 0,  0, 0.00::numeric, 'Extra rendered time creates offset credit.'),
     ('EMP-DEMO-018M', '2026-04-16'::date, 'late'::attendance_status,    '08:07'::time, '17:00'::time, 473, 7,  7, 0.00::numeric, 'Late by 7 minutes.'),
     ('EMP-DEMO-018M', '2026-04-29'::date, 'present'::attendance_status, '08:00'::time, '16:15'::time, 435, 0, 45, 0.00::numeric, 'Undertime by 45 minutes.'),
     ('EMP-DEMO-018M', '2026-05-13'::date, 'absent'::attendance_status,  NULL::time,    NULL::time,    0,   0,  0, 0.00::numeric, 'Unpaid demo absence.'),
     ('EMP-DEMO-024M', '2026-04-02'::date, 'late'::attendance_status,    '08:05'::time, '17:00'::time, 475, 5,  5, 0.00::numeric, 'Late by 5 minutes.'),
-    ('EMP-DEMO-024M', '2026-04-20'::date, 'present'::attendance_status, '08:00'::time, '18:00'::time, 540, 0,  0, 1.00::numeric, 'One hour approved overtime.'),
+    ('EMP-DEMO-024M', '2026-04-20'::date, 'present'::attendance_status, '08:00'::time, '18:00'::time, 540, 0,  0, 0.00::numeric, 'Extra rendered time creates offset credit.'),
     ('EMP-DEMO-024M', '2026-05-07'::date, 'present'::attendance_status, '08:00'::time, '16:20'::time, 440, 0, 40, 0.00::numeric, 'Undertime by 40 minutes.'),
     ('EMP-DEMO-024M', '2026-05-15'::date, 'absent'::attendance_status,  NULL::time,    NULL::time,    0,   0,  0, 0.00::numeric, 'Unpaid demo absence.')
 ) AS exception_row (
@@ -459,10 +459,16 @@ SELECT
   END,
   CASE WHEN final_status = 'late' THEN COALESCE(exception_late_minutes, 0) ELSE 0 END,
   CASE WHEN final_status IN ('present', 'late') THEN COALESCE(exception_undertime_minutes, 0) ELSE 0 END,
+  CASE
+    WHEN final_status IN ('present', 'late') THEN GREATEST(COALESCE(exception_rendered_minutes, 480) - 480, 0)
+    ELSE 0
+  END,
+  CASE
+    WHEN final_status IN ('present', 'late') THEN GREATEST(COALESCE(exception_rendered_minutes, 480) - 480, 0)
+    ELSE 0
+  END,
   0,
   0,
-  0,
-  CASE WHEN final_status IN ('present', 'late') THEN COALESCE(exception_overtime_hours, 0) ELSE 0 END,
   0,
   0,
   CASE
@@ -476,6 +482,26 @@ SELECT
   END,
   user_id
 FROM final_attendance;
+
+INSERT INTO offset_credits (
+  employee_id, attendance_id, date_earned, source, minutes_earned, minutes_remaining,
+  status, reason, reviewed_by, reviewed_at, created_by
+)
+SELECT
+  a.employee_id,
+  a.id,
+  a.date,
+  'excess_hours',
+  a.offset_earned_minutes,
+  a.offset_earned_minutes,
+  'approved',
+  'Generated from demo attendance excess minutes.',
+  a.created_by,
+  NOW(),
+  a.created_by
+FROM attendance a
+WHERE a.employee_id IN (SELECT id FROM demo_employee_seed_target_employees)
+  AND a.offset_earned_minutes > 0;
 
 CREATE TEMP TABLE demo_employee_seed_periods ON COMMIT DROP AS
 SELECT *
@@ -520,7 +546,7 @@ attendance_summary AS (
     COUNT(*) FILTER (WHERE a.status = 'absent')::numeric AS absence_days,
     COALESCE(SUM(a.late_minutes), 0)::numeric AS late_minutes,
     COALESCE(SUM(a.undertime_minutes), 0)::numeric AS undertime_minutes,
-    COALESCE(SUM(a.overtime_hours), 0)::numeric AS overtime_hours,
+    0::numeric AS overtime_hours,
     COALESCE(SUM(a.holiday_hours), 0)::numeric AS holiday_hours,
     COALESCE(SUM(a.excess_minutes), 0)::numeric AS excess_minutes,
     COALESCE(SUM(a.offset_earned_minutes), 0)::numeric AS offset_earned_minutes,
@@ -567,7 +593,7 @@ payroll_values AS (
     *,
     ROUND((daily_rate * expected_work_days)::numeric, 2) AS regular_pay,
     ROUND((daily_rate * paid_leave_days)::numeric, 2) AS paid_leave_amount,
-    ROUND((hourly_rate * overtime_hours * 1.25)::numeric, 2) AS overtime_pay,
+    0::numeric AS overtime_pay,
     ROUND((daily_rate * absence_days)::numeric, 2) AS absence_deduction,
     ROUND((hourly_rate * (late_minutes / 60))::numeric, 2) AS late_deduction,
     ROUND((hourly_rate * (GREATEST(undertime_minutes - late_minutes, 0) / 60))::numeric, 2) AS undertime_deduction
@@ -576,9 +602,9 @@ payroll_values AS (
 taxable_values AS (
   SELECT
     *,
-    ROUND((regular_pay + overtime_pay)::numeric, 2) AS taxable_earnings,
-    ROUND((regular_pay + overtime_pay)::numeric, 2) AS gross_pay,
-    ROUND(GREATEST(0, regular_pay + overtime_pay - absence_deduction - late_deduction - undertime_deduction)::numeric, 2) AS taxable_gross_for_period
+    ROUND(regular_pay::numeric, 2) AS taxable_earnings,
+    ROUND(regular_pay::numeric, 2) AS gross_pay,
+    ROUND(GREATEST(0, regular_pay - absence_deduction - late_deduction - undertime_deduction)::numeric, 2) AS taxable_gross_for_period
   FROM payroll_values
 ),
 withholding_values AS (
@@ -674,7 +700,14 @@ SELECT
     'demoSeed', true,
     'period', period_name,
     'payFrequency', 'semi-monthly',
-    'earnings', jsonb_build_object('regularPay', regular_pay, 'overtimePay', overtime_pay, 'paidLeaveAmount', paid_leave_amount),
+    'earnings', jsonb_build_object(
+      'regularPay', regular_pay,
+      'overtimePay', 0,
+      'paidOvertimeDisabled', true,
+      'offsetEarnedMinutes', offset_earned_minutes,
+      'offsetUsedMinutes', offset_used_minutes,
+      'paidLeaveAmount', paid_leave_amount
+    ),
     'deductions', jsonb_build_object('absenceDeduction', absence_deduction, 'lateDeduction', late_deduction, 'undertimeDeduction', undertime_deduction, 'withholdingTax', withholding_tax),
     'attendance', jsonb_build_object('expectedWorkDays', expected_work_days, 'daysWorked', days_worked, 'paidLeaveDays', paid_leave_days, 'absenceDays', absence_days)
   ),

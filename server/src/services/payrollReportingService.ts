@@ -221,7 +221,6 @@ export async function buildPayslipPayload(
 
   const earnings = {
     basicPay: toNumber(record.regular_pay),
-    overtimePay: toNumber(record.overtime_pay),
     holidayPay: toNumber(record.holiday_pay),
     nightDifferential: toNumber(record.night_diff_pay),
     paidLeaveAmount: toNumber(record.paid_leave_amount ?? earningsSnapshot.paidLeaveAmount),
@@ -249,7 +248,9 @@ export async function buildPayslipPayload(
     daysAbsent: toNumber(attendanceSummary.absence_days),
     lateMinutes: toNumber(record.late_minutes ?? attendanceSummary.late_minutes),
     undertimeMinutes: toNumber(record.undertime_minutes ?? attendanceSummary.undertime_minutes),
-    overtimeHours: toNumber(attendanceSummary.overtime_hours),
+    offsetEarnedMinutes: toNumber(record.offset_earned_minutes ?? attendanceSummary.offset_earned_minutes),
+    offsetUsedMinutes: toNumber(record.offset_used_minutes ?? attendanceSummary.offset_used_minutes),
+    offsetBalanceMinutes: toNumber(record.offset_balance_minutes),
     paidLeaveDays: toNumber(record.paid_leave_days),
     unpaidLeaveDays: toNumber(record.unpaid_leave_days),
     leaveWithoutPayDeduction: deductions.unpaidLeaveDeduction,
@@ -435,7 +436,7 @@ export async function buildPayrollReport(
               pr.expected_work_days, pr.days_worked AS present_days,
               COALESCE((pcs.attendance_summary_json->>'absence_days')::numeric, 0) AS absent_days,
               pr.late_minutes, pr.undertime_minutes,
-              COALESCE((pcs.attendance_summary_json->>'overtime_hours')::numeric, 0) AS overtime_hours,
+              pr.offset_earned_minutes, pr.offset_used_minutes, pr.offset_balance_minutes,
               (pr.paid_leave_days + pr.unpaid_leave_days) AS leave_days,
               (pr.absence_deduction + pr.late_deduction + pr.undertime_deduction + pr.leave_deduction) AS attendance_deductions
        FROM payroll_records pr
@@ -529,7 +530,6 @@ export async function generatePayslipPdf(payload: PayslipPayload): Promise<Buffe
     y += 24
     const earningsRows = [
       ['Basic pay', payload.earnings.basicPay],
-      ['Overtime pay', payload.earnings.overtimePay],
       ['Holiday pay', payload.earnings.holidayPay],
       ['Night differential', payload.earnings.nightDifferential],
       ['Paid leave amount', payload.earnings.paidLeaveAmount],
@@ -567,7 +567,9 @@ export async function generatePayslipPdf(payload: PayslipPayload): Promise<Buffe
       ['Days absent', payload.attendance.daysAbsent],
       ['Late minutes', payload.attendance.lateMinutes],
       ['Undertime minutes', payload.attendance.undertimeMinutes],
-      ['Overtime hours', payload.attendance.overtimeHours],
+      ['Offset earned minutes', payload.attendance.offsetEarnedMinutes],
+      ['Offset used minutes', payload.attendance.offsetUsedMinutes],
+      ['Remaining offset minutes', payload.attendance.offsetBalanceMinutes],
       ['Paid leave days', payload.attendance.paidLeaveDays],
       ['Unpaid leave days', payload.attendance.unpaidLeaveDays],
     ] as const

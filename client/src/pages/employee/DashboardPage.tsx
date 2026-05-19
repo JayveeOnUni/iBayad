@@ -289,7 +289,7 @@ export default function EmployeeDashboardPage() {
                   { label: 'Expected time to date', value: hours(monthly?.expectedHours ?? 0), percent: 100 },
                   { label: 'Worked time', value: hours(monthly?.totalHours ?? 0), percent: workedPercent },
                   { label: 'Shortage time', value: hours(monthly?.shortageHours ?? 0), percent: shortagePercent },
-                  { label: 'Overtime', value: hours(monthly?.overtimeHours ?? 0), percent: monthly && monthly.expectedHours > 0 ? (monthly.overtimeHours / monthly.expectedHours) * 100 : 0 },
+                  { label: 'Undertime', value: hours(monthly?.undertimeHours ?? 0), percent: monthly && monthly.expectedHours > 0 ? (monthly.undertimeHours / monthly.expectedHours) * 100 : 0 },
                   { label: 'Offset earned', value: hours(monthly?.offsetEarnedHours ?? 0), percent: offsetPercent },
                   { label: 'Offset used', value: hours(monthly?.offsetUsedHours ?? 0), percent: monthly && monthly.expectedHours > 0 ? (monthly.offsetUsedHours / monthly.expectedHours) * 100 : 0 },
                 ].map((item) => (

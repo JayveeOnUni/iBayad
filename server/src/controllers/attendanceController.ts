@@ -185,12 +185,24 @@ export const getAttendanceSummary = asyncHandler(async (req: Request, res: Respo
        COUNT(*) FILTER (WHERE status = 'late') AS late_days,
        COUNT(*) FILTER (WHERE status = 'half_day') AS half_days,
        COALESCE(SUM(late_minutes), 0) AS total_late_minutes,
-       COALESCE(SUM(excess_minutes), 0) AS total_excess_minutes,
-       COALESCE(SUM(offset_earned_minutes), 0) AS total_offset_earned_minutes,
+       COALESCE(SUM(GREATEST(
+         COALESCE(excess_minutes, 0),
+         COALESCE(offset_earned_minutes, 0),
+         ROUND(COALESCE(overtime_hours, 0) * 60)::int
+       )), 0) AS total_excess_minutes,
+       COALESCE(SUM(GREATEST(
+         COALESCE(offset_earned_minutes, 0),
+         COALESCE(excess_minutes, 0),
+         ROUND(COALESCE(overtime_hours, 0) * 60)::int
+       )), 0) AS total_offset_earned_minutes,
        COALESCE(SUM(offset_used_minutes), 0) AS total_offset_used_minutes,
-       ROUND(COALESCE(SUM(offset_earned_minutes), 0) / 60.0, 2) AS total_offset_earned_hours,
+       ROUND(COALESCE(SUM(GREATEST(
+         COALESCE(offset_earned_minutes, 0),
+         COALESCE(excess_minutes, 0),
+         ROUND(COALESCE(overtime_hours, 0) * 60)::int
+       )), 0) / 60.0, 2) AS total_offset_earned_hours,
        ROUND(COALESCE(SUM(offset_used_minutes), 0) / 60.0, 2) AS total_offset_used_hours,
-       ROUND(COALESCE(SUM(overtime_hours), 0), 2) AS total_overtime_hours,
+       0 AS total_overtime_hours,
        COALESCE(SUM(total_worked_minutes), 0) AS total_worked_minutes
      FROM attendance
      WHERE employee_id = $1
