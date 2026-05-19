@@ -19,7 +19,7 @@ const statusVariant: Record<string, 'success' | 'warning' | 'danger' | 'default'
 const emergencyReasons = [
   { value: 'family_accident_hospitalization_serious_sickness', label: 'Family accident, hospitalization, or serious sickness' },
   { value: 'natural_calamity', label: 'Natural calamity or fortuitous event' },
-  { value: 'extraordinary_situation', label: 'Fire, robbery, kidnapping, eviction, or similar' },
+  { value: 'extraordinary_situation', label: 'Others' },
 ]
 
 const relationships = [
@@ -287,7 +287,7 @@ export default function EmployeeLeavePage() {
                   <option key={leaveType.id} value={leaveType.id}>{leaveType.name}</option>
                 ))}
               </select>
-              {selectedType?.policyNotes && <p className="text-xs text-amber-700">{selectedType.policyNotes}</p>}
+              
             </div>
 
             <div className="grid grid-cols-2 gap-3">

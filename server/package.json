@@ -12,6 +12,7 @@
     "admin:create": "node scripts/create-admin.js",
     "seed:demo-account": "node scripts/seed-demo-employee-account.js",
     "seed:demo-employee": "node scripts/run-sql-file.js src/db/seed-demo-employee-attendance.sql",
+    "seed:demo-payroll-specialist": "node scripts/run-sql-file.js src/db/seed-demo-payroll-specialist-18m.sql",
     "test": "node --test -r ts-node/register/transpile-only tests/*.test.ts",
     "test:add-employee": "node --test -r ts-node/register/transpile-only tests/employeeController.addEmployee.test.ts"
   },

@@ -75,6 +75,19 @@ function statusVariant(status: string, isDeleted = false): 'success' | 'neutral'
   return 'neutral'
 }
 
+function maskBankName(value?: string): string | undefined {
+  if (!value) return undefined
+  return 'Hidden'
+}
+
+function maskAccountNumber(value?: string): string | undefined {
+  if (!value) return undefined
+  const digits = value.replace(/\D/g, '')
+  if (!digits) return '****'
+  const tail = digits.slice(-4)
+  return `****${tail}`
+}
+
 function InfoRow({ icon, label, value }: InfoRowProps) {
   return (
     <div className="flex items-start gap-3 py-2.5">
@@ -101,6 +114,7 @@ export default function EmployeeDetailPage() {
   const [isSaving, setIsSaving] = useState(false)
   const [isLifecycleSaving, setIsLifecycleSaving] = useState(false)
   const [isSendingActivation, setIsSendingActivation] = useState(false)
+  const [isBankVisible, setIsBankVisible] = useState(false)
   const [isLookupLoading, setIsLookupLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
@@ -145,6 +159,7 @@ export default function EmployeeDetailPage() {
         setError(null)
         const res = await employeeService.getById(id)
         setEmployee(res.data)
+        setIsBankVisible(false)
         payrollService.computeTax(res.data.basicSalary)
           .then((taxRes) => setDeductionPreview(taxRes.data))
           .catch(() => setDeductionPreview(null))
@@ -314,6 +329,7 @@ export default function EmployeeDetailPage() {
   const isArchived = employee.isDeleted
   const isActiveEmployee = employee.employmentStatus === 'active'
   const canReactivateAccount = !isArchived && !isActiveEmployee
+  const hasBankDetails = Boolean(employee.bankName || employee.bankAccountNumber)
   const sss = (deductionPreview?.sss ?? {}) as Record<string, unknown>
   const philHealth = (deductionPreview?.philHealth ?? {}) as Record<string, unknown>
   const pagIBIG = (deductionPreview?.pagIBIG ?? {}) as Record<string, unknown>
@@ -516,10 +532,23 @@ export default function EmployeeDetailPage() {
 
           {/* Bank Info */}
           <Card>
-            <h3 className="text-sm font-semibold text-ink mb-3">Banking Details</h3>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-ink">Banking Details</h3>
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={() => setIsBankVisible((value) => !value)}
+                disabled={!hasBankDetails}
+              >
+                {isBankVisible ? 'Hide' : 'Show'}
+              </Button>
+            </div>
             <div className="grid grid-cols-2 gap-x-6">
-              <InfoRow label="Bank Name" value={employee.bankName} />
-              <InfoRow label="Account Number" value={employee.bankAccountNumber} />
+              <InfoRow label="Bank Name" value={isBankVisible ? employee.bankName : maskBankName(employee.bankName)} />
+              <InfoRow
+                label="Account Number"
+                value={isBankVisible ? employee.bankAccountNumber : maskAccountNumber(employee.bankAccountNumber)}
+              />
             </div>
           </Card>
         </div>

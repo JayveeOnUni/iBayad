@@ -4,6 +4,8 @@ import {
   Ban,
   CalendarDays,
   CheckCircle,
+  ChevronDown,
+  ChevronUp,
   DollarSign,
   Download,
   Eye,
@@ -307,6 +309,8 @@ export default function PayrollPage() {
     search: '',
   })
   const [isReportLoading, setIsReportLoading] = useState(false)
+  const [isAuditCardOpen, setIsAuditCardOpen] = useState(true)
+  const [showAllAudit, setShowAllAudit] = useState(false)
   const canCreatePeriod = hasPayrollPermission(currentUser?.role, 'create_period')
   const canProcessPayroll = hasPayrollPermission(currentUser?.role, 'process')
   const canValidatePayroll = hasPayrollPermission(currentUser?.role, 'validate')
@@ -405,6 +409,10 @@ export default function PayrollPage() {
     if (!selectedPeriodId) return
     loadPeriodDetails(selectedPeriodId)
   }, [loadPeriodDetails, selectedPeriodId])
+
+  useEffect(() => {
+    setShowAllAudit(false)
+  }, [selectedPeriod?.id])
 
   const yearOptions = useMemo(() => {
     const currentYear = new Date().getFullYear()
@@ -1108,22 +1116,52 @@ export default function PayrollPage() {
                 <CardHeader
                   title="Audit History"
                   subtitle="Latest period events"
-                  action={<History size={17} className="text-muted" />}
+                  action={
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-2 text-xs text-muted hover:text-ink"
+                      onClick={() => setIsAuditCardOpen((value) => !value)}
+                      aria-expanded={isAuditCardOpen}
+                    >
+                      <History size={16} />
+                      {isAuditCardOpen ? 'Collapse' : 'Expand'}
+                      {isAuditCardOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                    </button>
+                  }
                 />
-                {selectedPeriod.auditHistory?.length ? (
-                  <div className="space-y-3">
-                    {selectedPeriod.auditHistory.map((entry) => (
-                      <div key={entry.id} className="border-b border-border pb-3 last:border-0 last:pb-0">
-                        <p className="text-sm font-medium capitalize text-ink">{auditLabel(entry)}</p>
-                        <p className="text-xs leading-5 text-muted">{auditDetail(entry)}</p>
-                        <p className="text-xs text-muted">
-                          {entry.actorEmail ?? 'System'} - {formatDateTime(entry.createdAt)}
-                        </p>
+                {isAuditCardOpen && (
+                  selectedPeriod.auditHistory?.length ? (
+                    <div className="space-y-3">
+                      <div className="relative pl-6">
+                        <span className="absolute left-2 top-1 h-full w-px bg-border" aria-hidden />
+                        {(showAllAudit ? selectedPeriod.auditHistory : selectedPeriod.auditHistory.slice(0, 3)).map((entry) => {
+                          return (
+                            <div key={entry.id} className="relative pb-3 last:pb-0">
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-medium capitalize text-ink">{auditLabel(entry)}</p>
+                                <p className="text-xs text-muted">{entry.actorEmail ?? 'System'} - {formatDateTime(entry.createdAt)}</p>
+                                <p className="mt-1 text-xs text-ink">{auditDetail(entry)}</p>
+                                {entry.reason && (
+                                  <p className="mt-1 text-xs text-muted">Reason: {entry.reason}</p>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
                       </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted">No audit events recorded yet.</p>
+                      {selectedPeriod.auditHistory.length > 3 && (
+                        <button
+                          type="button"
+                          className="ml-6 text-xs font-medium text-muted hover:text-ink"
+                          onClick={() => setShowAllAudit((value) => !value)}
+                        >
+                          {showAllAudit ? 'Show latest 3' : `View all ${selectedPeriod.auditHistory.length}`}
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted">No audit events recorded yet.</p>
+                  )
                 )}
               </Card>
             )}

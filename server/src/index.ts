@@ -22,6 +22,7 @@ import {
   validateProductionConfig,
 } from './config/environment'
 import { assertEmailProviderReady, verifyEmailProviderReadiness } from './services/emailService'
+import { startAutoAbsentScheduler } from './services/attendanceAutoAbsentService'
 import { logger } from './utils/logger'
 
 dotenv.config()
@@ -165,6 +166,8 @@ async function startServer(): Promise<void> {
         healthCheckPath: '/api/health',
       })
     })
+
+    startAutoAbsentScheduler()
 
     if (!requireEmailReady && shouldCheckEmailOnStartup(requireEmailReady)) {
       void runOptionalEmailReadinessCheck().catch((error) => {
