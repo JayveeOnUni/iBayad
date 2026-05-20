@@ -1,12 +1,15 @@
 import { Request, Response } from 'express'
 import { asyncHandler, createError } from '../middleware/errorHandler'
 import {
+  getAttendanceSettings,
   getGeneralSettings,
   getLeaveSettings,
   getPayrollSettings,
+  updateAttendanceSettings,
   updateGeneralSettings,
   updateLeaveSettings,
   updatePayrollSettings,
+  type AttendanceSettingsInput,
   type GeneralSettingsInput,
   LeaveSettingsValidationError,
   type PayrollSettingsInput,
@@ -43,6 +46,12 @@ function throwValidationError(errors: ValidationErrors): never {
 
 function throwPayrollValidationError(errors: ValidationErrors): never {
   const error = createError('Payroll settings contain invalid values.', 400)
+  error.details = { errors }
+  throw error
+}
+
+function throwAttendanceValidationError(errors: ValidationErrors): never {
+  const error = createError('Attendance settings contain invalid values.', 400)
   error.details = { errors }
   throw error
 }
@@ -166,6 +175,25 @@ function validatePayrollSettingsPayload(body: Record<string, unknown>): PayrollS
   return input
 }
 
+function validateAttendanceSettingsPayload(body: Record<string, unknown>): AttendanceSettingsInput {
+  const errors: ValidationErrors = {}
+  const input: AttendanceSettingsInput = {
+    graceMinutes: normalizeNumber(body.graceMinutes),
+    halfDayMinutes: normalizeNumber(body.halfDayMinutes),
+  }
+
+  if (!Number.isInteger(input.graceMinutes) || input.graceMinutes < 0 || input.graceMinutes > 240) {
+    addFieldError(errors, 'graceMinutes', 'Grace period must be a whole number from 0 to 240')
+  }
+  if (!Number.isInteger(input.halfDayMinutes) || input.halfDayMinutes < 1 || input.halfDayMinutes > 1440) {
+    addFieldError(errors, 'halfDayMinutes', 'Half-day threshold must be a whole number from 1 to 1440')
+  }
+
+  if (Object.keys(errors).length > 0) throwAttendanceValidationError(errors)
+
+  return input
+}
+
 export const getAdminGeneralSettings = asyncHandler(async (_req: Request, res: Response) => {
   const data = await getGeneralSettings()
   res.json({ success: true, data })
@@ -182,10 +210,21 @@ export const getAdminPayrollSettings = asyncHandler(async (_req: Request, res: R
   res.json({ success: true, data })
 })
 
+export const getAdminAttendanceSettings = asyncHandler(async (_req: Request, res: Response) => {
+  const data = await getAttendanceSettings()
+  res.json({ success: true, data })
+})
+
 export const updateAdminPayrollSettings = asyncHandler(async (req: Request, res: Response) => {
   const input = validatePayrollSettingsPayload(req.body as Record<string, unknown>)
   const data = await updatePayrollSettings(input, req.user?.userId ?? null)
   res.json({ success: true, data, message: 'Payroll settings updated.' })
+})
+
+export const updateAdminAttendanceSettings = asyncHandler(async (req: Request, res: Response) => {
+  const input = validateAttendanceSettingsPayload(req.body as Record<string, unknown>)
+  const data = await updateAttendanceSettings(input, req.user?.userId ?? null)
+  res.json({ success: true, data, message: 'Attendance settings updated.' })
 })
 
 export const getAdminLeaveSettings = asyncHandler(async (_req: Request, res: Response) => {

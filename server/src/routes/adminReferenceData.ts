@@ -25,9 +25,11 @@ import {
   updateWorkShift,
 } from '../controllers/referenceDataController'
 import {
+  getAdminAttendanceSettings,
   getAdminGeneralSettings,
   getAdminLeaveSettings,
   getAdminPayrollSettings,
+  updateAdminAttendanceSettings,
   updateAdminGeneralSettings,
   updateAdminLeaveSettings,
   updateAdminPayrollSettings,
@@ -42,6 +44,8 @@ router.get('/settings/general', getAdminGeneralSettings)
 router.put('/settings/general', updateAdminGeneralSettings)
 router.get('/settings/payroll', getAdminPayrollSettings)
 router.put('/settings/payroll', updateAdminPayrollSettings)
+router.get('/settings/attendance', getAdminAttendanceSettings)
+router.put('/settings/attendance', updateAdminAttendanceSettings)
 router.get('/settings/leave', getAdminLeaveSettings)
 router.put('/settings/leave', updateAdminLeaveSettings)
 router.get('/departments/active', listActiveDepartments)

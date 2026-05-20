@@ -1,8 +1,9 @@
 import { api } from './api'
-import type { ApiResponse, GeneralSettings, LeaveSettings, PayrollSettings } from '../types'
+import type { ApiResponse, AttendanceSettings, GeneralSettings, LeaveSettings, PayrollSettings } from '../types'
 
 export type GeneralSettingsPayload = GeneralSettings
 export type PayrollSettingsPayload = PayrollSettings
+export type AttendanceSettingsPayload = AttendanceSettings
 export type LeaveSettingsPayload = Pick<LeaveSettings, 'leaveTypes' | 'policies'>
 
 export const settingsService = {
@@ -17,6 +18,12 @@ export const settingsService = {
       .then((res) => res.data),
   updatePayroll: (payload: PayrollSettingsPayload) =>
     api.put<ApiResponse<PayrollSettings>>('/admin/settings/payroll', payload)
+      .then((res) => res.data),
+  getAttendance: () =>
+    api.get<ApiResponse<AttendanceSettings>>('/admin/settings/attendance')
+      .then((res) => res.data),
+  updateAttendance: (payload: AttendanceSettingsPayload) =>
+    api.put<ApiResponse<AttendanceSettings>>('/admin/settings/attendance', payload)
       .then((res) => res.data),
   getLeave: () =>
     api.get<ApiResponse<LeaveSettings>>('/admin/settings/leave')

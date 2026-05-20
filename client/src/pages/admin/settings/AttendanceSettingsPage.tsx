@@ -1,117 +1,160 @@
+import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
-import { Save } from 'lucide-react'
+import { Clock3, Save } from 'lucide-react'
 import Card from '../../../components/ui/Card'
 import Button from '../../../components/ui/Button'
 import Input from '../../../components/ui/Input'
+import { FeedbackMessage, PageHeader } from '../../../components/ui/Page'
 import { useToast } from '../../../components/ui/Toast'
+import { settingsService } from '../../../services/settingsService'
+import type { AttendanceSettings } from '../../../types'
 
-interface AttendanceSettingsForm {
-  graceMinutes: number
-  halfDayMinutes: number
-  requireBiometrics: boolean
-  allowMobileClockIn: boolean
-  geofencingEnabled: boolean
-  geofenceRadiusMeters: number
-  offsetRequiresApproval: boolean
-  minOffsetCreditMinutes: number
+type AttendanceSettingsForm = AttendanceSettings
+type AttendanceSettingsField = keyof AttendanceSettingsForm
+type PageMessage = { variant: 'info' | 'success' | 'warning' | 'danger'; text: string }
+
+const defaultSettings: AttendanceSettingsForm = {
+  graceMinutes: 5,
+  halfDayMinutes: 240,
+}
+
+function extractServerFieldErrors(error: unknown): Partial<Record<AttendanceSettingsField, string>> {
+  const details = (error as { details?: { errors?: Record<string, string[]> } } | null)?.details
+  const serverErrors = details?.errors
+  if (!serverErrors) return {}
+
+  return Object.entries(serverErrors).reduce<Partial<Record<AttendanceSettingsField, string>>>((acc, [field, messages]) => {
+    if (field in defaultSettings) {
+      acc[field as AttendanceSettingsField] = messages[0]
+    }
+    return acc
+  }, {})
 }
 
 export default function AttendanceSettingsPage() {
   const { showToast } = useToast()
-  const { register, handleSubmit } = useForm<AttendanceSettingsForm>({
-    defaultValues: {
-      graceMinutes: 5,
-      halfDayMinutes: 240,
-      requireBiometrics: false,
-      allowMobileClockIn: true,
-      geofencingEnabled: false,
-      geofenceRadiusMeters: 100,
-      offsetRequiresApproval: true,
-      minOffsetCreditMinutes: 1,
-    },
+  const [message, setMessage] = useState<PageMessage | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isSaving, setIsSaving] = useState(false)
+  const {
+    register,
+    handleSubmit,
+    reset,
+    setError,
+    formState: { errors },
+  } = useForm<AttendanceSettingsForm>({
+    defaultValues: defaultSettings,
+    mode: 'onBlur',
   })
 
-  const onSubmit = (data: AttendanceSettingsForm) => {
-    localStorage.setItem('ibayad-attendance-settings', JSON.stringify(data))
-    showToast({
-      variant: 'success',
-      title: 'Attendance settings saved',
-      description: 'Saved for this workstation.',
-    })
+  useEffect(() => {
+    let isMounted = true
+
+    settingsService.getAttendance()
+      .then((settings) => {
+        if (!isMounted) return
+        reset({ ...defaultSettings, ...settings })
+        setMessage(null)
+      })
+      .catch((err) => {
+        if (!isMounted) return
+        reset(defaultSettings)
+        setMessage({
+          variant: 'danger',
+          text: err instanceof Error ? err.message : 'Unable to load attendance settings.',
+        })
+      })
+      .finally(() => {
+        if (isMounted) setIsLoading(false)
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [reset])
+
+  const onSubmit = async (data: AttendanceSettingsForm) => {
+    setIsSaving(true)
+    setMessage(null)
+
+    try {
+      const savedSettings = await settingsService.updateAttendance(data)
+      reset({ ...defaultSettings, ...savedSettings })
+      showToast({ variant: 'success', title: 'Attendance settings saved' })
+    } catch (err) {
+      const fieldErrors = extractServerFieldErrors(err)
+      Object.entries(fieldErrors).forEach(([field, errorMessage]) => {
+        setError(field as AttendanceSettingsField, { type: 'server', message: errorMessage })
+      })
+      setMessage({
+        variant: 'danger',
+        text: err instanceof Error ? err.message : 'Unable to save attendance settings.',
+      })
+    } finally {
+      setIsSaving(false)
+    }
   }
 
+  const isFormDisabled = isLoading || isSaving
+
   return (
-    <div className="space-y-5 max-w-3xl">
-      <div>
-        <h2 className="text-xl font-bold text-ink">Attendance Settings</h2>
-        <p className="text-sm text-muted mt-0.5">Configure attendance rules, grace periods, and time tracking</p>
-      </div>
+    <div className="max-w-3xl space-y-5">
+      <PageHeader
+        title="Attendance Settings"
+        subtitle="Configure tardiness and half-day rules used when attendance records are computed."
+      />
+
+      {message && <FeedbackMessage variant={message.variant}>{message.text}</FeedbackMessage>}
+      {isLoading && <FeedbackMessage>Loading attendance settings...</FeedbackMessage>}
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
         <Card>
-          <h3 className="text-sm font-semibold text-ink mb-5">Tardiness & Absence Rules</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="mb-5 flex items-center gap-2.5">
+            <Clock3 size={18} className="text-muted" />
+            <h3 className="text-sm font-semibold text-ink">Attendance Rules</h3>
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Input
               label="Grace Period (minutes)"
               type="number"
-              hint="Minutes before marking late"
-              {...register('graceMinutes', { valueAsNumber: true })}
+              min={0}
+              max={240}
+              disabled={isFormDisabled}
+              {...register('graceMinutes', {
+                valueAsNumber: true,
+                required: 'Enter a grace period',
+                min: { value: 0, message: 'Grace period cannot be negative' },
+                max: { value: 240, message: 'Grace period must be 240 minutes or less' },
+                validate: (value) => Number.isInteger(value) || 'Grace period must be a whole number',
+              })}
+              error={errors.graceMinutes?.message}
+              hint="Late minutes start counting only after this allowance."
             />
             <Input
-              label="Half Day Threshold (minutes)"
+              label="Half-Day Threshold (minutes)"
               type="number"
-              hint="Hours worked to count as half day"
-              {...register('halfDayMinutes', { valueAsNumber: true })}
+              min={1}
+              max={1440}
+              disabled={isFormDisabled}
+              {...register('halfDayMinutes', {
+                valueAsNumber: true,
+                required: 'Enter a half-day threshold',
+                min: { value: 1, message: 'Half-day threshold must be at least 1 minute' },
+                max: { value: 1440, message: 'Half-day threshold must be 1440 minutes or less' },
+                validate: (value) => Number.isInteger(value) || 'Half-day threshold must be a whole number',
+              })}
+              error={errors.halfDayMinutes?.message}
+              hint="Attendance is marked half day when rendered minutes fall below this value."
             />
           </div>
         </Card>
 
-        <Card>
-          <h3 className="text-sm font-semibold text-ink mb-5">Time Tracking</h3>
-          <div className="space-y-4">
-            {[
-              { key: 'requireBiometrics' as const, label: 'Require Biometric Clock-In', desc: 'Employees must use fingerprint/face ID for attendance' },
-              { key: 'allowMobileClockIn' as const, label: 'Allow Mobile Clock-In', desc: 'Employees can clock in via the mobile app' },
-              { key: 'geofencingEnabled' as const, label: 'Enable Geofencing', desc: 'Restrict clock-in to within the office radius' },
-            ].map((s) => (
-              <div key={s.key} className="flex items-center justify-between py-3 border-b border-border last:border-0">
-                <div>
-                  <p className="text-sm font-medium text-ink">{s.label}</p>
-                  <p className="text-xs text-muted">{s.desc}</p>
-                </div>
-                <input type="checkbox" {...register(s.key)} className="w-5 h-5 accent-brand" />
-              </div>
-            ))}
-          </div>
-          <div className="mt-4">
-            <Input
-              label="Geofence Radius (meters)"
-              type="number"
-              hint="Distance from office allowed for mobile clock-in"
-              {...register('geofenceRadiusMeters', { valueAsNumber: true })}
-            />
-          </div>
-        </Card>
-
-        <Card>
-          <h3 className="text-sm font-semibold text-ink mb-5">Offset Credit Rules</h3>
-          <div className="flex items-center justify-between py-3 border-b border-border mb-4">
-            <div>
-              <p className="text-sm font-medium text-ink">Offset Requires Approval</p>
-              <p className="text-xs text-muted">Earned credits and usage requests need admin approval</p>
-            </div>
-            <input type="checkbox" {...register('offsetRequiresApproval')} className="w-5 h-5 accent-brand" />
-          </div>
-          <Input
-            label="Minimum Offset Credit (minutes)"
-            type="number"
-            hint="Minimum excess minutes to create a pending offset credit"
-            {...register('minOffsetCreditMinutes', { valueAsNumber: true })}
-          />
-        </Card>
+      
 
         <div className="flex justify-end">
-          <Button type="submit" leftIcon={<Save size={15} />}>Save Changes</Button>
+          <Button type="submit" leftIcon={<Save size={15} />} isLoading={isSaving} disabled={isLoading}>
+            Save Changes
+          </Button>
         </div>
       </form>
     </div>

@@ -16,6 +16,7 @@ import {
   reviewOffsetCredit,
   reviewOffsetUsage,
 } from '../services/attendanceOffsetService'
+import { getAttendancePolicySettings } from '../services/settingsService'
 
 function protectedPunchMessage(status?: string | null): string {
   const label = String(status ?? 'attendance').replace(/_/g, ' ')
@@ -87,11 +88,15 @@ export const clockIn = asyncHandler(async (req: Request, res: Response) => {
   }
 
   const employeeId = req.user!.employeeId!
-  const shift = await getEmployeeShift(employeeId)
+  const [shift, attendancePolicy] = await Promise.all([
+    getEmployeeShift(employeeId),
+    getAttendancePolicySettings(),
+  ])
   const metrics = calculateAttendanceMetrics({
     attendanceDate: today,
     timeIn: now,
     shift,
+    policy: attendancePolicy,
   })
 
   const result = await pool.query(

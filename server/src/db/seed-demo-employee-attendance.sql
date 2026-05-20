@@ -13,8 +13,8 @@ BEGIN;
 CREATE TEMP TABLE demo_employee_seed_params ON COMMIT DROP AS
 SELECT
   DATE '2026-04-01' AS attendance_start_date,
-  DATE '2026-05-18' AS attendance_end_date,
-  DATE '2026-05-18' AS demo_current_date,
+  DATE '2026-05-19' AS attendance_end_date,
+  DATE '2026-05-19' AS demo_current_date,
   'DemoEmployee@2026'::text AS demo_password;
 
 CREATE TEMP TABLE demo_employee_seed_accounts ON COMMIT DROP AS
@@ -347,24 +347,24 @@ CREATE TEMP TABLE demo_employee_seed_attendance_exceptions ON COMMIT DROP AS
 SELECT *
 FROM (
   VALUES
-    ('EMP-DEMO-006M', '2026-04-03'::date, 'late'::attendance_status,    '08:12'::time, '17:00'::time, 468, 12, 12, 0.00::numeric, 'Late by 12 minutes.'),
-    ('EMP-DEMO-006M', '2026-04-21'::date, 'absent'::attendance_status,  NULL::time,    NULL::time,    0,   0,  0, 0.00::numeric, 'Unpaid demo absence.'),
-    ('EMP-DEMO-006M', '2026-05-05'::date, 'present'::attendance_status, '08:00'::time, '16:30'::time, 450, 0, 30, 0.00::numeric, 'Undertime by 30 minutes.'),
-    ('EMP-DEMO-006M', '2026-05-12'::date, 'present'::attendance_status, '07:55'::time, '18:00'::time, 545, 0,  0, 0.00::numeric, 'Extra rendered time creates offset credit.'),
-    ('EMP-DEMO-012M', '2026-04-06'::date, 'late'::attendance_status,    '08:18'::time, '17:00'::time, 462, 18, 18, 0.00::numeric, 'Late by 18 minutes.'),
-    ('EMP-DEMO-012M', '2026-04-30'::date, 'present'::attendance_status, '08:00'::time, '18:30'::time, 570, 0,  0, 0.00::numeric, 'Extra rendered time creates offset credit.'),
-    ('EMP-DEMO-012M', '2026-05-11'::date, 'absent'::attendance_status,  NULL::time,    NULL::time,    0,   0,  0, 0.00::numeric, 'Unpaid demo absence.'),
-    ('EMP-DEMO-012M', '2026-05-14'::date, 'present'::attendance_status, '08:00'::time, '16:00'::time, 420, 0, 60, 0.00::numeric, 'Undertime by one hour.'),
-    ('EMP-DEMO-018M', '2026-04-10'::date, 'present'::attendance_status, '08:00'::time, '19:00'::time, 600, 0,  0, 0.00::numeric, 'Extra rendered time creates offset credit.'),
-    ('EMP-DEMO-018M', '2026-04-16'::date, 'late'::attendance_status,    '08:07'::time, '17:00'::time, 473, 7,  7, 0.00::numeric, 'Late by 7 minutes.'),
-    ('EMP-DEMO-018M', '2026-04-29'::date, 'present'::attendance_status, '08:00'::time, '16:15'::time, 435, 0, 45, 0.00::numeric, 'Undertime by 45 minutes.'),
-    ('EMP-DEMO-018M', '2026-05-13'::date, 'absent'::attendance_status,  NULL::time,    NULL::time,    0,   0,  0, 0.00::numeric, 'Unpaid demo absence.'),
-    ('EMP-DEMO-024M', '2026-04-02'::date, 'late'::attendance_status,    '08:05'::time, '17:00'::time, 475, 5,  5, 0.00::numeric, 'Late by 5 minutes.'),
-    ('EMP-DEMO-024M', '2026-04-20'::date, 'present'::attendance_status, '08:00'::time, '18:00'::time, 540, 0,  0, 0.00::numeric, 'Extra rendered time creates offset credit.'),
-    ('EMP-DEMO-024M', '2026-05-07'::date, 'present'::attendance_status, '08:00'::time, '16:20'::time, 440, 0, 40, 0.00::numeric, 'Undertime by 40 minutes.'),
-    ('EMP-DEMO-024M', '2026-05-15'::date, 'absent'::attendance_status,  NULL::time,    NULL::time,    0,   0,  0, 0.00::numeric, 'Unpaid demo absence.')
+    ('EMP-DEMO-006M', '2026-04-03'::date, 'late'::attendance_status,    '08:12'::time, 468, 12, 12, 0.00::numeric, 'Late by 12 minutes.'),
+    ('EMP-DEMO-006M', '2026-04-21'::date, 'absent'::attendance_status,  '08:00'::time,   0,  0,  0, 0.00::numeric, 'Unpaid demo absence.'),
+    ('EMP-DEMO-006M', '2026-05-05'::date, 'present'::attendance_status, '08:00'::time, 450,  0, 30, 0.00::numeric, 'Undertime by 30 minutes.'),
+    ('EMP-DEMO-006M', '2026-05-12'::date, 'present'::attendance_status, '07:55'::time, 545,  0,  0, 0.00::numeric, 'Extra rendered time creates offset credit.'),
+    ('EMP-DEMO-012M', '2026-04-06'::date, 'late'::attendance_status,    '08:18'::time, 462, 18, 18, 0.00::numeric, 'Late by 18 minutes.'),
+    ('EMP-DEMO-012M', '2026-04-30'::date, 'present'::attendance_status, '08:00'::time, 570,  0,  0, 0.00::numeric, 'Extra rendered time creates offset credit.'),
+    ('EMP-DEMO-012M', '2026-05-11'::date, 'absent'::attendance_status,  '08:00'::time,   0,  0,  0, 0.00::numeric, 'Unpaid demo absence.'),
+    ('EMP-DEMO-012M', '2026-05-14'::date, 'present'::attendance_status, '08:00'::time, 420,  0, 60, 0.00::numeric, 'Undertime by one hour.'),
+    ('EMP-DEMO-018M', '2026-04-10'::date, 'present'::attendance_status, '08:00'::time, 600,  0,  0, 0.00::numeric, 'Extra rendered time creates offset credit.'),
+    ('EMP-DEMO-018M', '2026-04-16'::date, 'late'::attendance_status,    '08:07'::time, 473,  7,  7, 0.00::numeric, 'Late by 7 minutes.'),
+    ('EMP-DEMO-018M', '2026-04-29'::date, 'present'::attendance_status, '08:00'::time, 435,  0, 45, 0.00::numeric, 'Undertime by 45 minutes.'),
+    ('EMP-DEMO-018M', '2026-05-13'::date, 'absent'::attendance_status,  '08:00'::time,   0,  0,  0, 0.00::numeric, 'Unpaid demo absence.'),
+    ('EMP-DEMO-024M', '2026-04-02'::date, 'late'::attendance_status,    '08:05'::time, 475,  5,  5, 0.00::numeric, 'Late by 5 minutes.'),
+    ('EMP-DEMO-024M', '2026-04-20'::date, 'present'::attendance_status, '08:00'::time, 540,  0,  0, 0.00::numeric, 'Extra rendered time creates offset credit.'),
+    ('EMP-DEMO-024M', '2026-05-07'::date, 'present'::attendance_status, '08:00'::time, 440,  0, 40, 0.00::numeric, 'Undertime by 40 minutes.'),
+    ('EMP-DEMO-024M', '2026-05-15'::date, 'absent'::attendance_status,  '08:00'::time,   0,  0,  0, 0.00::numeric, 'Unpaid demo absence.')
 ) AS exception_row (
-  employee_number, work_date, status, time_in_time, time_out_time,
+  employee_number, work_date, status, time_in_time,
   actual_rendered_minutes, late_minutes, undertime_minutes, overtime_hours, remarks
 );
 
@@ -404,7 +404,6 @@ resolved_attendance AS (
     leave_day.reason AS leave_reason,
     exception_row.status AS exception_status,
     exception_row.time_in_time,
-    exception_row.time_out_time,
     exception_row.actual_rendered_minutes AS exception_rendered_minutes,
     exception_row.late_minutes AS exception_late_minutes,
     exception_row.undertime_minutes AS exception_undertime_minutes,
@@ -440,14 +439,8 @@ INSERT INTO attendance (
 SELECT
   employee_id,
   work_date,
-  CASE
-    WHEN final_status IN ('rest_day', 'on_leave', 'absent') THEN NULL
-    ELSE (work_date::text || ' ' || COALESCE(time_in_time, '08:00'::time)::text || '+08')::timestamptz
-  END,
-  CASE
-    WHEN final_status IN ('rest_day', 'on_leave', 'absent') THEN NULL
-    ELSE (work_date::text || ' ' || COALESCE(time_out_time, '17:00'::time)::text || '+08')::timestamptz
-  END,
+  (work_date::text || ' ' || COALESCE(time_in_time, '08:00'::time)::text || '+08')::timestamptz,
+  NULL,
   final_status,
   CASE WHEN final_status = 'rest_day' THEN NULL ELSE shift_id END,
   CASE WHEN final_status = 'rest_day' THEN NULL ELSE (work_date::text || ' 08:00:00+08')::timestamptz END,

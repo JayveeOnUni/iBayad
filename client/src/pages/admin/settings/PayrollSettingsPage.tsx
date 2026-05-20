@@ -124,7 +124,7 @@ export default function PayrollSettingsPage() {
     <div className="max-w-3xl space-y-5">
       <PageHeader
         title="Payroll Settings"
-        subtitle="Configure pay schedule defaults, attendance policy controls, and payroll rate multipliers."
+        subtitle="Configure pay schedule defaults, offset credit policy, and payroll rate multipliers."
       />
 
       {message && <FeedbackMessage variant={message.variant}>{message.text}</FeedbackMessage>}

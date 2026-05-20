@@ -54,7 +54,7 @@ async function markEmployeesAbsentForDate(date: Date): Promise<number> {
     [dateKey, null]
   )
 
-  return result.rowCount
+  return result.rowCount ?? 0
 }
 
 async function runAutoAbsentPass(now: Date): Promise<void> {

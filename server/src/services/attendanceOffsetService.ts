@@ -1,7 +1,7 @@
 import { PoolClient } from 'pg'
 import pool from '../utils/db'
 import { createError } from '../middleware/errorHandler'
-import { getPayrollPolicySettings } from './settingsService'
+import { getAttendancePolicySettings, getPayrollPolicySettings, type AttendancePolicySettings } from './settingsService'
 
 export type OffsetReviewAction = 'approve' | 'reject'
 
@@ -19,6 +19,7 @@ interface AttendanceMetricsInput {
   timeIn?: Date | string | null
   timeOut?: Date | string | null
   shift: ShiftSchedule
+  policy?: AttendancePolicySettings
   approvedOffsetMinutes?: number
   currentStatus?: string | null
 }
@@ -69,6 +70,10 @@ function minutesBetween(start: Date, end: Date): number {
 
 function minutesToHours(minutes: number): number {
   return Math.round((minutes / 60) * 100) / 100
+}
+
+function addMinutes(date: Date, minutes: number): Date {
+  return new Date(date.getTime() + (minutes * 60000))
 }
 
 export function isProtectedAttendanceStatus(status?: string | null): boolean {
@@ -134,6 +139,8 @@ export function calculateAttendanceMetrics(input: AttendanceMetricsInput): Atten
   const timeOut = toDate(input.timeOut)
   const scheduledStart = scheduledTime(input.attendanceDate, input.shift.start_time)
   const scheduledEnd = scheduledTime(input.attendanceDate, input.shift.end_time)
+  const graceMinutes = Math.max(0, Math.trunc(Number(input.policy?.graceMinutes ?? 0)))
+  const halfDayMinutes = Math.max(1, Math.trunc(Number(input.policy?.halfDayMinutes ?? Math.round(Number(input.shift.work_hours) * 30))))
 
   if (scheduledEnd <= scheduledStart) {
     scheduledEnd.setDate(scheduledEnd.getDate() + 1)
@@ -147,13 +154,14 @@ export function calculateAttendanceMetrics(input: AttendanceMetricsInput): Atten
   const approvedOffsetMinutes = Math.max(0, Number(input.approvedOffsetMinutes ?? 0))
   const offsetUsedMinutes = timeOut ? approvedOffsetMinutes : 0
   const effectiveRenderedMinutes = actualRenderedMinutes + offsetUsedMinutes
-  const lateMinutes = timeIn && timeIn > scheduledStart ? minutesBetween(scheduledStart, timeIn) : 0
+  const lateThreshold = addMinutes(scheduledStart, graceMinutes)
+  const lateMinutes = timeIn && timeIn > lateThreshold ? minutesBetween(lateThreshold, timeIn) : 0
   const undertimeMinutes = timeOut ? Math.max(0, requiredWorkMinutes - effectiveRenderedMinutes) : 0
   const excessMinutes = timeOut ? Math.max(0, actualRenderedMinutes - requiredWorkMinutes) : 0
 
   let status = input.currentStatus ?? 'present'
   if (!isProtectedAttendanceStatus(status) || timeIn || timeOut) {
-    if (timeOut && effectiveRenderedMinutes < requiredWorkMinutes / 2) {
+    if (timeOut && effectiveRenderedMinutes < halfDayMinutes) {
       status = 'half_day'
     } else if (lateMinutes > 0) {
       status = 'late'
@@ -204,9 +212,10 @@ export async function recomputeAttendanceRecord(attendanceId: string, actorUserI
   const attendance = await findAttendanceForMetrics(attendanceId)
   if (!attendance) throw createError('Attendance record not found', 404)
 
-  const [shift, approvedOffsetMinutes] = await Promise.all([
+  const [shift, approvedOffsetMinutes, attendancePolicy] = await Promise.all([
     getEmployeeShift(attendance.employee_id),
     getApprovedOffsetUsageMinutes(attendance.employee_id, attendance.date),
+    getAttendancePolicySettings(),
   ])
   const metrics = calculateAttendanceMetrics({
     attendanceDate: attendance.date,
@@ -214,6 +223,7 @@ export async function recomputeAttendanceRecord(attendanceId: string, actorUserI
     timeOut: attendance.time_out,
     currentStatus: attendance.status,
     shift,
+    policy: attendancePolicy,
     approvedOffsetMinutes,
   })
 

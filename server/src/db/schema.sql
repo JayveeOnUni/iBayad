@@ -723,6 +723,8 @@ INSERT INTO system_settings (key, value, description) VALUES
   ('work_days_per_week', '5', 'Standard working days per week'),
   ('work_days_per_month', '22', 'Standard working days per month'),
   ('work_hours_per_day', '8', 'Standard working hours per day'),
+  ('attendance_grace_minutes', '5', 'Grace period in minutes before counting tardiness'),
+  ('attendance_half_day_minutes', '240', 'Rendered minutes threshold below which attendance is classified as half day'),
   ('offset_credit_enabled', 'true', 'Convert excess attendance minutes into offset credits'),
   ('offset_requires_approval', 'true', 'Offset credits and usage require admin approval'),
   ('minimum_offset_credit_minutes', '1', 'Minimum excess minutes to create pending offset credit'),

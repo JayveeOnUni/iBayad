@@ -40,6 +40,13 @@ export interface PayrollSettings {
 
 export type PayrollSettingsInput = PayrollSettings
 
+export interface AttendanceSettings {
+  graceMinutes: number
+  halfDayMinutes: number
+}
+
+export type AttendanceSettingsInput = AttendanceSettings
+
 export type LeaveDayCountType = 'working_days' | 'calendar_days'
 
 export interface LeaveTypeSettings {
@@ -115,6 +122,11 @@ export interface PayrollPolicySettings {
   specialHolidayRate: number
 }
 
+export interface AttendancePolicySettings {
+  graceMinutes: number
+  halfDayMinutes: number
+}
+
 interface SettingDefinition {
   field: keyof GeneralSettings
   key: string
@@ -127,6 +139,13 @@ interface PayrollSettingDefinition {
   key: string
   description: string
   defaultValue: PayrollSettings[keyof PayrollSettings]
+}
+
+interface AttendanceSettingDefinition {
+  field: keyof AttendanceSettings
+  key: string
+  description: string
+  defaultValue: AttendanceSettings[keyof AttendanceSettings]
 }
 
 interface SystemSettingRow {
@@ -212,6 +231,13 @@ export const PAYROLL_SETTING_DEFINITIONS: PayrollSettingDefinition[] = [
 ]
 
 const payrollDefinitionsByKey = new Map(PAYROLL_SETTING_DEFINITIONS.map((definition) => [definition.key, definition]))
+
+export const ATTENDANCE_SETTING_DEFINITIONS: AttendanceSettingDefinition[] = [
+  { field: 'graceMinutes', key: 'attendance_grace_minutes', description: 'Grace period in minutes before counting tardiness', defaultValue: 5 },
+  { field: 'halfDayMinutes', key: 'attendance_half_day_minutes', description: 'Rendered minutes threshold below which attendance is classified as half day', defaultValue: 240 },
+]
+
+const attendanceDefinitionsByKey = new Map(ATTENDANCE_SETTING_DEFINITIONS.map((definition) => [definition.key, definition]))
 
 function settingValueToString(value: unknown): string {
   if (value == null) return ''
@@ -334,6 +360,13 @@ function emptyPayrollSettings(): PayrollSettings {
   }), {} as PayrollSettings)
 }
 
+function emptyAttendanceSettings(): AttendanceSettings {
+  return ATTENDANCE_SETTING_DEFINITIONS.reduce((settings, definition) => ({
+    ...settings,
+    [definition.field]: definition.defaultValue,
+  }), {} as AttendanceSettings)
+}
+
 export async function seedMissingGeneralSettings(): Promise<void> {
   await pool.query(
     `INSERT INTO system_settings (key, value, description)
@@ -375,6 +408,22 @@ export async function seedMissingPayrollSettings(): Promise<void> {
        SET description = EXCLUDED.description
        WHERE system_settings.description IS DISTINCT FROM EXCLUDED.description`,
     [keys, values, descriptions]
+  )
+}
+
+export async function seedMissingAttendanceSettings(): Promise<void> {
+  await pool.query(
+    `INSERT INTO system_settings (key, value, description)
+     SELECT key, value::jsonb, description
+     FROM UNNEST($1::text[], $2::text[], $3::text[]) AS defaults(key, value, description)
+     ON CONFLICT (key) DO UPDATE
+       SET description = EXCLUDED.description
+       WHERE system_settings.description IS DISTINCT FROM EXCLUDED.description`,
+    [
+      ATTENDANCE_SETTING_DEFINITIONS.map((definition) => definition.key),
+      ATTENDANCE_SETTING_DEFINITIONS.map((definition) => JSON.stringify(definition.defaultValue)),
+      ATTENDANCE_SETTING_DEFINITIONS.map((definition) => definition.description),
+    ]
   )
 }
 
@@ -432,6 +481,28 @@ export async function getPayrollSettings(): Promise<PayrollSettings> {
 
   if (!rowsByKey.has('regular_holiday_rate') && rowsByKey.has(LEGACY_HOLIDAY_RATE_KEY)) {
     settings.regularHolidayRate = settingValueToNumber(rowsByKey.get(LEGACY_HOLIDAY_RATE_KEY), 2.0)
+  }
+
+  return settings
+}
+
+export async function getAttendanceSettings(): Promise<AttendanceSettings> {
+  await seedMissingAttendanceSettings()
+
+  const result = await pool.query<SystemSettingRow>(
+    `SELECT key, value
+     FROM system_settings
+     WHERE key = ANY($1::text[])`,
+    [ATTENDANCE_SETTING_DEFINITIONS.map((definition) => definition.key)]
+  )
+
+  const settings = emptyAttendanceSettings()
+
+  for (const row of result.rows) {
+    const definition = attendanceDefinitionsByKey.get(row.key)
+    if (!definition) continue
+
+    settings[definition.field] = settingValueToNumber(row.value, definition.defaultValue) as never
   }
 
   return settings
@@ -527,6 +598,44 @@ export async function updatePayrollSettings(
   }
 
   return getPayrollSettings()
+}
+
+export async function updateAttendanceSettings(
+  input: AttendanceSettingsInput,
+  updatedBy: string | null
+): Promise<AttendanceSettings> {
+  const client = await pool.connect()
+
+  try {
+    await client.query('BEGIN')
+
+    for (const definition of ATTENDANCE_SETTING_DEFINITIONS) {
+      await client.query(
+        `INSERT INTO system_settings (key, value, description, updated_by, updated_at)
+         VALUES ($1, $2::jsonb, $3, $4::uuid, NOW())
+         ON CONFLICT (key) DO UPDATE
+         SET value = EXCLUDED.value,
+             description = EXCLUDED.description,
+             updated_by = EXCLUDED.updated_by,
+             updated_at = NOW()`,
+        [
+          definition.key,
+          JSON.stringify(input[definition.field]),
+          definition.description,
+          updatedBy,
+        ]
+      )
+    }
+
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+
+  return getAttendanceSettings()
 }
 
 async function readLeaveTypeSettings(): Promise<LeaveTypeSettings[]> {
@@ -1018,6 +1127,8 @@ export async function updateLeaveSettings(
 }
 
 export async function getPayrollPolicySettings(): Promise<PayrollPolicySettings> {
+  await seedMissingPayrollSettings()
+
   const result = await pool.query<SystemSettingRow>(
     `SELECT key, value
      FROM system_settings
@@ -1043,5 +1154,14 @@ export async function getPayrollPolicySettings(): Promise<PayrollPolicySettings>
       ? settingValueToNumber(rowsByKey.get('regular_holiday_rate'), 2.0)
       : settingValueToNumber(rowsByKey.get(LEGACY_HOLIDAY_RATE_KEY), 2.0),
     specialHolidayRate: settingValueToNumber(rowsByKey.get('special_holiday_rate'), 1.3),
+  }
+}
+
+export async function getAttendancePolicySettings(): Promise<AttendancePolicySettings> {
+  const settings = await getAttendanceSettings()
+
+  return {
+    graceMinutes: settings.graceMinutes,
+    halfDayMinutes: settings.halfDayMinutes,
   }
 }

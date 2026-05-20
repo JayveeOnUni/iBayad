@@ -758,6 +758,11 @@ export interface PayrollSettings {
   thirteenthMonthEnabled: boolean
 }
 
+export interface AttendanceSettings {
+  graceMinutes: number
+  halfDayMinutes: number
+}
+
 export interface LeaveSettings {
   leaveTypes: LeaveTypeConfig[]
   policies: LeavePolicyConfig[]

@@ -124,7 +124,6 @@ export default function EmployeeLeavePage() {
     return [
       { label: 'Vacation', balance: byCode('VACATION'), tone: 'text-emerald-700' },
       { label: 'Sick', balance: byCode('SICK'), tone: 'text-sky-700' },
-      { label: 'Emergency unpaid preview', balance: byCode('EMERGENCY'), tone: 'text-amber-700' },
       { label: 'Bereavement', balance: byCode('BEREAVEMENT'), tone: 'text-slate-700' },
     ]
   }, [balances])
@@ -220,7 +219,7 @@ export default function EmployeeLeavePage() {
 
       {message && <div className="text-sm text-ink bg-slate-50 border border-border rounded-lg px-4 py-3">{message}</div>}
 
-      <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-3">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {summary.map((item) => (
           <Card key={item.label} padding="none">
             <button

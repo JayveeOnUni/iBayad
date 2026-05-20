@@ -51,6 +51,7 @@ type PageMessage = {
 }
 
 type PayrollAction = 'process' | 'approve' | 'release' | 'correction'
+type WorkspaceTab = 'overview' | 'validation' | 'records' | 'reports' | 'audit'
 
 type PeriodForm = {
   month: string
@@ -311,6 +312,7 @@ export default function PayrollPage() {
   const [isReportLoading, setIsReportLoading] = useState(false)
   const [isAuditCardOpen, setIsAuditCardOpen] = useState(true)
   const [showAllAudit, setShowAllAudit] = useState(false)
+  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>('overview')
   const canCreatePeriod = hasPayrollPermission(currentUser?.role, 'create_period')
   const canProcessPayroll = hasPayrollPermission(currentUser?.role, 'process')
   const canValidatePayroll = hasPayrollPermission(currentUser?.role, 'validate')
@@ -414,6 +416,24 @@ export default function PayrollPage() {
     setShowAllAudit(false)
   }, [selectedPeriod?.id])
 
+  const workspaceTabs = useMemo(() => {
+    const tabs: Array<{ key: WorkspaceTab; label: string }> = [
+      { key: 'overview', label: 'Overview' },
+      { key: 'validation', label: 'Validation' },
+      { key: 'records', label: 'Records' },
+    ]
+
+    if (canViewReports) tabs.push({ key: 'reports', label: 'Reports' })
+    if (canViewAudit) tabs.push({ key: 'audit', label: 'Audit' })
+    return tabs
+  }, [canViewAudit, canViewReports])
+
+  useEffect(() => {
+    if (!workspaceTabs.some((tab) => tab.key === workspaceTab)) {
+      setWorkspaceTab('overview')
+    }
+  }, [workspaceTab, workspaceTabs])
+
   const yearOptions = useMemo(() => {
     const currentYear = new Date().getFullYear()
     const years = new Set<number>()
@@ -431,6 +451,13 @@ export default function PayrollPage() {
     ? (validationReport.periodId === selectedPeriod?.id ? validationReport.issues : [])
     : []
   const focusValidationReport = validationReport?.periodId === focusPeriod?.id ? validationReport : null
+  const selectedPeriodLocked = Boolean(selectedPeriod?.isLocked || selectedPeriod?.status === 'locked')
+  const selectedPeriodApproveBlocked = Boolean(
+    selectedPeriod &&
+    selectedPeriod.status === 'ready_for_approval' &&
+    validationReport?.periodId === selectedPeriod.id &&
+    validationReport.criticalIssueCount > 0
+  )
   const periodPreviewState = useMemo(() => {
     if (!payrollSettings) return { preview: null as PeriodPreview | null, error: null as string | null }
     try {
@@ -461,6 +488,30 @@ export default function PayrollPage() {
     voidRecordConfirm.confirmation.trim() === 'VOID' &&
     voidRecordConfirm.reason.trim().length > 0
   )
+  const workspaceStatusHint = useMemo(() => {
+    if (!selectedPeriod) return ''
+    if (selectedPeriodLocked || ['released', 'locked'].includes(selectedPeriod.status)) {
+      return 'Payroll is locked for reference, reporting, and payslip access.'
+    }
+    if (selectedPeriod.status === 'approved') {
+      return 'Release payroll to lock records and make payslips available.'
+    }
+    if (selectedPeriod.status === 'ready_for_approval') {
+      return selectedPeriodApproveBlocked
+        ? 'Resolve validation issues before approval can continue.'
+        : 'Review validation, then approve this payroll period.'
+    }
+    if (selectedPeriod.status === 'needs_correction') {
+      return 'Reprocess this payroll period after correcting source records.'
+    }
+    if (selectedPeriod.status === 'validation_failed') {
+      return 'Run corrections or reprocess after resolving validation blockers.'
+    }
+    if (selectedPeriod.status === 'processed' || selectedPeriod.status === 'processing') {
+      return 'Validate this payroll period, then move it toward approval.'
+    }
+    return 'Process this payroll period to generate or refresh employee payroll records.'
+  }, [selectedPeriod, selectedPeriodApproveBlocked, selectedPeriodLocked])
 
   const openPeriod = (period: PayrollPeriod) => {
     setSelectedPeriodId(period.id)
@@ -471,6 +522,10 @@ export default function PayrollPage() {
   const updateFilter = (next: Partial<typeof filters>) => {
     setPeriodPage(1)
     setFilters((current) => ({ ...current, ...next }))
+  }
+
+  const queuePeriodAction = (action: PayrollAction, period: PayrollPeriod) => {
+    setConfirmAction({ action, period, confirmation: '', notes: '' })
   }
 
   const createPeriod = async () => {
@@ -678,6 +733,95 @@ export default function PayrollPage() {
     loadReport()
   }, [selectedPeriod?.id, reportType, reportFilters.status, reportFilters.employmentStatus, reportFilters.search, canViewReports])
 
+  const workspacePrimaryAction = useMemo(() => {
+    if (!selectedPeriod) return null
+
+    const isBusy = Boolean(actionLoading)
+    const canProcess =
+      canProcessPayroll &&
+      ['draft', 'processing', 'processed', 'validation_failed', 'needs_correction'].includes(selectedPeriod.status) &&
+      !selectedPeriodLocked
+
+    if (canProcess) {
+      return {
+        label: actionButtonLabel('process', selectedPeriod),
+        variant: 'primary' as const,
+        icon: <Play size={14} />,
+        disabled: isBusy,
+        title: undefined,
+        onClick: () => queuePeriodAction('process', selectedPeriod),
+      }
+    }
+
+    if (canApprovePayroll && selectedPeriod.status === 'ready_for_approval' && !selectedPeriodApproveBlocked) {
+      return {
+        label: 'Approve',
+        variant: 'secondary' as const,
+        icon: <CheckCircle size={14} />,
+        disabled: isBusy,
+        title: undefined,
+        onClick: () => queuePeriodAction('approve', selectedPeriod),
+      }
+    }
+
+    if (canReleasePayroll && selectedPeriod.status === 'approved') {
+      return {
+        label: 'Release',
+        variant: 'success' as const,
+        icon: <DollarSign size={14} />,
+        disabled: isBusy,
+        title: undefined,
+        onClick: () => queuePeriodAction('release', selectedPeriod),
+      }
+    }
+
+    if (
+      canRequestCorrection &&
+      ['processed', 'validation_failed', 'ready_for_approval', 'approved'].includes(selectedPeriod.status) &&
+      !selectedPeriodLocked
+    ) {
+      return {
+        label: 'Correction',
+        variant: 'outline' as const,
+        icon: <Undo2 size={14} />,
+        disabled: isBusy,
+        title: undefined,
+        onClick: () => queuePeriodAction('correction', selectedPeriod),
+      }
+    }
+
+    if (selectedPeriodApproveBlocked || canValidatePayroll) {
+      return {
+        label: 'Review Validation',
+        variant: 'outline' as const,
+        icon: <ShieldCheck size={14} />,
+        disabled: false,
+        title: undefined,
+        onClick: () => setWorkspaceTab('validation'),
+      }
+    }
+
+    return {
+      label: canViewAudit ? 'View Audit' : 'View Records',
+      variant: 'ghost' as const,
+      icon: canViewAudit ? <History size={14} /> : <FileText size={14} />,
+      disabled: false,
+      title: undefined,
+      onClick: () => setWorkspaceTab(canViewAudit ? 'audit' : 'records'),
+    }
+  }, [
+    actionLoading,
+    canApprovePayroll,
+    canProcessPayroll,
+    canReleasePayroll,
+    canRequestCorrection,
+    canValidatePayroll,
+    canViewAudit,
+    selectedPeriod,
+    selectedPeriodApproveBlocked,
+    selectedPeriodLocked,
+  ])
+
   const renderActions = (period: PayrollPeriod) => {
     const isBusy = Boolean(actionLoading)
     const approveBlocked = Boolean(
@@ -696,7 +840,7 @@ export default function PayrollPage() {
             disabled={isBusy}
             onClick={(event) => {
               event.stopPropagation()
-              setConfirmAction({ action: 'process', period, confirmation: '', notes: '' })
+              queuePeriodAction('process', period)
             }}
           >
             {actionButtonLabel('process', period)}
@@ -711,7 +855,7 @@ export default function PayrollPage() {
             title={approveBlocked ? 'Fix validation issues before approval' : undefined}
             onClick={(event) => {
               event.stopPropagation()
-              setConfirmAction({ action: 'approve', period, confirmation: '', notes: '' })
+              queuePeriodAction('approve', period)
             }}
           >
             Approve
@@ -725,7 +869,7 @@ export default function PayrollPage() {
             disabled={isBusy}
             onClick={(event) => {
               event.stopPropagation()
-              setConfirmAction({ action: 'correction', period, confirmation: '', notes: '' })
+              queuePeriodAction('correction', period)
             }}
           >
             Correction
@@ -739,7 +883,7 @@ export default function PayrollPage() {
             disabled={isBusy}
             onClick={(event) => {
               event.stopPropagation()
-              setConfirmAction({ action: 'release', period, confirmation: '', notes: '' })
+              queuePeriodAction('release', period)
             }}
           >
             Release
@@ -955,85 +1099,227 @@ export default function PayrollPage() {
       )}
 
       {selectedPeriod && (
-        <>
-          <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
-            <Card>
-              <CardHeader
-                title={selectedPeriod.name}
-                subtitle={`${formatDate(selectedPeriod.startDate)} - ${formatDate(selectedPeriod.endDate)} | Pay date ${formatDate(selectedPeriod.payDate)}`}
-                action={
-                  <Badge variant={statusVariant[selectedPeriod.status] ?? 'neutral'} dot>
-                    {statusLabel(selectedPeriod.status)}
-                  </Badge>
-                }
-              />
-
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-muted">Gross Pay</p>
-                  <p className="mt-1 text-lg font-semibold text-ink">{formatPeso(selectedPeriod.totalGrossPay ?? 0)}</p>
+        <Card padding="none" className="overflow-hidden">
+          <div className="border-b border-border bg-neutral-20 px-5 py-5">
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+              <div className="min-w-0 space-y-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted">Selected Payroll Workspace</p>
+                  {isDetailLoading && <span className="text-xs text-muted">Refreshing details...</span>}
                 </div>
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-muted">Deductions</p>
-                  <p className="mt-1 text-lg font-semibold text-danger">{formatPeso(selectedPeriod.totalDeductions ?? 0)}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-muted">Net Pay</p>
-                  <p className="mt-1 text-lg font-semibold text-brand">{formatPeso(selectedPeriod.totalNetPay ?? 0)}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-muted">Records</p>
-                  <p className="mt-1 text-lg font-semibold text-ink">
-                    {selectedPeriod.recordCount ?? 0}/{selectedPeriod.activeEmployeeCount ?? 0}
-                  </p>
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <h2 className="text-2xl font-semibold text-ink">{selectedPeriod.name}</h2>
+                    <Badge variant={statusVariant[selectedPeriod.status] ?? 'neutral'} dot>
+                      {statusLabel(selectedPeriod.status)}
+                    </Badge>
+                  </div>
+                  <p className="text-sm text-muted">{workspaceStatusHint}</p>
                 </div>
               </div>
 
-              {(selectedPeriod.isLocked || selectedPeriod.status === 'locked') && (
-                <div className="mt-5 flex items-start gap-3 rounded-md border border-success-border bg-success-muted px-3 py-3 text-sm text-ink">
-                  <Lock size={16} className="mt-0.5 text-success" />
-                  <div>
-                    <p className="font-semibold">Locked Payroll</p>
-                    <p className="text-muted">
-                      Released payroll is read-only. Payslips remain available, but recalculation and edits are blocked.
+              {workspacePrimaryAction && (
+                <div className="flex flex-col gap-2 xl:items-end">
+                  <Button
+                    size="sm"
+                    variant={workspacePrimaryAction.variant}
+                    leftIcon={workspacePrimaryAction.icon}
+                    disabled={workspacePrimaryAction.disabled}
+                    title={workspacePrimaryAction.title}
+                    onClick={workspacePrimaryAction.onClick}
+                  >
+                    {workspacePrimaryAction.label}
+                  </Button>
+                  {selectedPeriodApproveBlocked && (
+                    <p className="text-xs text-danger">Validation blockers must be cleared before approval.</p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-lg border border-border bg-white px-4 py-3 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted">Date Range</p>
+                <p className="mt-1 text-sm font-semibold text-ink">
+                  {formatDate(selectedPeriod.startDate)} - {formatDate(selectedPeriod.endDate)}
+                </p>
+              </div>
+              <div className="rounded-lg border border-border bg-white px-4 py-3 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted">Pay Date</p>
+                <p className="mt-1 text-sm font-semibold text-ink">{formatDate(selectedPeriod.payDate)}</p>
+              </div>
+              <div className="rounded-lg border border-border bg-white px-4 py-3 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted">Record Count</p>
+                <p className="mt-1 text-sm font-semibold text-ink">
+                  {selectedPeriod.recordCount ?? 0}/{selectedPeriod.activeEmployeeCount ?? 0} employees
+                </p>
+              </div>
+              <div className="rounded-lg border border-border bg-white px-4 py-3 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted">Lock State</p>
+                <p className={`mt-1 text-sm font-semibold ${selectedPeriodLocked ? 'text-success' : 'text-warning'}`}>
+                  {selectedPeriodLocked ? 'Locked and read-only' : 'Open for updates'}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="border-b border-border bg-white px-3 sm:px-5">
+            <div className="flex gap-1 overflow-x-auto pb-px" role="tablist" aria-label="Payroll workspace sections">
+              {workspaceTabs.map((tab) => {
+                const badgeCount =
+                  tab.key === 'validation'
+                    ? (selectedValidationIssues.length || warnings.length)
+                    : tab.key === 'records'
+                      ? recordMeta.total
+                      : tab.key === 'audit'
+                        ? (selectedPeriod.auditHistory?.length ?? 0)
+                        : null
+
+                return (
+                  <button
+                    key={tab.key}
+                    id={`payroll-workspace-tab-${tab.key}`}
+                    type="button"
+                    role="tab"
+                    aria-selected={workspaceTab === tab.key}
+                    aria-controls={`payroll-workspace-panel-${tab.key}`}
+                    onClick={() => setWorkspaceTab(tab.key)}
+                    className={[
+                      'inline-flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors',
+                      workspaceTab === tab.key
+                        ? 'border-brand text-brand'
+                        : 'border-transparent text-muted hover:text-ink',
+                    ].join(' ')}
+                  >
+                    <span>{tab.label}</span>
+                    {badgeCount !== null && (
+                      <span
+                        className={[
+                          'rounded-full px-2 py-0.5 text-[11px] font-semibold',
+                          workspaceTab === tab.key ? 'bg-brand-50 text-brand' : 'bg-neutral-30 text-neutral-80',
+                        ].join(' ')}
+                      >
+                        {badgeCount}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div
+            id={`payroll-workspace-panel-${workspaceTab}`}
+            role="tabpanel"
+            aria-labelledby={`payroll-workspace-tab-${workspaceTab}`}
+            className="px-3 py-4 sm:px-5 sm:py-5"
+          >
+            {workspaceTab === 'overview' && (
+              <div className="space-y-5">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+                  <div className="rounded-lg border border-border px-4 py-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted">Gross Pay</p>
+                    <p className="mt-2 text-lg font-semibold text-ink">{formatPeso(selectedPeriod.totalGrossPay ?? 0)}</p>
+                  </div>
+                  <div className="rounded-lg border border-border px-4 py-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted">Deductions</p>
+                    <p className="mt-2 text-lg font-semibold text-danger">{formatPeso(selectedPeriod.totalDeductions ?? 0)}</p>
+                  </div>
+                  <div className="rounded-lg border border-border px-4 py-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted">Net Pay</p>
+                    <p className="mt-2 text-lg font-semibold text-brand">{formatPeso(selectedPeriod.totalNetPay ?? 0)}</p>
+                  </div>
+                  <div className="rounded-lg border border-border px-4 py-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted">Records</p>
+                    <p className="mt-2 text-lg font-semibold text-ink">
+                      {selectedPeriod.recordCount ?? 0}/{selectedPeriod.activeEmployeeCount ?? 0}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border px-4 py-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted">Lock State</p>
+                    <p className={`mt-2 text-lg font-semibold ${selectedPeriodLocked ? 'text-success' : 'text-warning'}`}>
+                      {selectedPeriodLocked ? 'Locked' : 'Unlocked'}
                     </p>
                   </div>
                 </div>
-              )}
 
-              <div className="mt-5 border-t border-border pt-5">
-                <p className="mb-3 text-sm font-semibold text-ink">Payroll Status Timeline</p>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
-                  {[
-                    ['Created', selectedPeriod.createdAt],
-                    ['Processed', selectedPeriod.processedAt],
-                    ['Validated', selectedPeriod.validatedAt],
-                    ['Reprocessed', selectedPeriod.reprocessedAt],
-                    ['Approved', selectedPeriod.approvedAt],
-                    ['Released', selectedPeriod.releasedAt],
-                    ['Locked', selectedPeriod.lockedAt],
-                  ].map(([label, value]) => (
-                    <div key={label} className="rounded-md border border-border px-3 py-2">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</p>
-                      <p className="mt-1 text-xs text-ink">{value ? formatDateTime(value) : 'Pending'}</p>
+                {selectedPeriodLocked && (
+                  <div className="flex items-start gap-3 rounded-lg border border-success-border bg-success-muted px-4 py-4 text-sm text-ink">
+                    <Lock size={16} className="mt-0.5 text-success" />
+                    <div>
+                      <p className="font-semibold">Locked Payroll</p>
+                      <p className="text-muted">
+                        Released payroll is read-only. Payslips remain available, but recalculation and edits are blocked.
+                      </p>
                     </div>
-                  ))}
-                </div>
-                {(selectedPeriod.approvalNotes || selectedPeriod.correctionNotes || selectedPeriod.reprocessReason || selectedPeriod.lockedReason) && (
-                  <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
-                    {selectedPeriod.approvalNotes && <p className="rounded-md border border-border px-3 py-2 text-sm text-muted">Approval: {selectedPeriod.approvalNotes}</p>}
-                    {selectedPeriod.correctionNotes && <p className="rounded-md border border-warning-border bg-warning-muted px-3 py-2 text-sm text-ink">Correction: {selectedPeriod.correctionNotes}</p>}
-                    {selectedPeriod.reprocessReason && <p className="rounded-md border border-border px-3 py-2 text-sm text-muted">Reprocess: {selectedPeriod.reprocessReason}</p>}
-                    {selectedPeriod.lockedReason && <p className="rounded-md border border-border px-3 py-2 text-sm text-muted">Lock: {selectedPeriod.lockedReason}</p>}
                   </div>
                 )}
-              </div>
 
-              <div className="mt-5 border-t border-border pt-5">
-                <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.7fr)_minmax(320px,1fr)]">
+                  <div className="rounded-lg border border-border p-4">
+                    <div className="mb-4 flex items-center gap-2">
+                      <CalendarDays size={16} className="text-brand" />
+                      <p className="text-sm font-semibold text-ink">Payroll Status Timeline</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-7">
+                      {[
+                        ['Created', selectedPeriod.createdAt],
+                        ['Processed', selectedPeriod.processedAt],
+                        ['Validated', selectedPeriod.validatedAt],
+                        ['Reprocessed', selectedPeriod.reprocessedAt],
+                        ['Approved', selectedPeriod.approvedAt],
+                        ['Released', selectedPeriod.releasedAt],
+                        ['Locked', selectedPeriod.lockedAt],
+                      ].map(([label, value]) => (
+                        <div key={label} className="rounded-md border border-border bg-neutral-20 px-3 py-3">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</p>
+                          <p className="mt-1 text-xs text-ink">{value ? formatDateTime(value) : 'Pending'}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-border p-4">
+                    <div className="mb-4 flex items-center gap-2">
+                      <FileText size={16} className="text-brand" />
+                      <p className="text-sm font-semibold text-ink">Workflow Notes</p>
+                    </div>
+                    {(selectedPeriod.approvalNotes || selectedPeriod.correctionNotes || selectedPeriod.reprocessReason || selectedPeriod.lockedReason) ? (
+                      <div className="space-y-3">
+                        {selectedPeriod.approvalNotes && (
+                          <p className="rounded-md border border-border px-3 py-2 text-sm text-muted">Approval: {selectedPeriod.approvalNotes}</p>
+                        )}
+                        {selectedPeriod.correctionNotes && (
+                          <p className="rounded-md border border-warning-border bg-warning-muted px-3 py-2 text-sm text-ink">
+                            Correction: {selectedPeriod.correctionNotes}
+                          </p>
+                        )}
+                        {selectedPeriod.reprocessReason && (
+                          <p className="rounded-md border border-border px-3 py-2 text-sm text-muted">Reprocess: {selectedPeriod.reprocessReason}</p>
+                        )}
+                        {selectedPeriod.lockedReason && (
+                          <p className="rounded-md border border-border px-3 py-2 text-sm text-muted">Lock: {selectedPeriod.lockedReason}</p>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="rounded-md border border-dashed border-border bg-neutral-20 px-3 py-6 text-sm text-muted">
+                        Approval, correction, reprocess, and lock notes will appear here as the payroll period moves forward.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {workspaceTab === 'validation' && (
+              <div className="space-y-5">
+                <div className="flex flex-col gap-3 rounded-lg border border-border px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex items-center gap-2">
                     <AlertTriangle size={16} className={hasCriticalValidationIssues ? 'text-danger' : 'text-success'} />
-                    <p className="text-sm font-semibold text-ink">Payroll Validation</p>
+                    <div>
+                      <p className="text-sm font-semibold text-ink">Payroll Validation</p>
+                      <p className="text-xs text-muted">Review issue counts before approval or release.</p>
+                    </div>
                     {validationReport?.periodId === selectedPeriod.id && (
                       <Badge variant={validationReport.isValid ? 'success' : 'danger'}>
                         {validationReport.isValid ? 'Validation Passed' : 'Validation Issues Found'}
@@ -1052,39 +1338,40 @@ export default function PayrollPage() {
                     Validate Payroll
                   </Button>
                 </div>
+
                 {validationReport?.periodId === selectedPeriod.id && (
-                  <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-3 xl:grid-cols-6">
-                    <div className="rounded-md border border-border px-3 py-2">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+                    <div className="rounded-lg border border-border px-3 py-3">
                       <p className="text-xs text-muted">Complete Attendance</p>
                       <p className="text-sm font-semibold text-ink">
                         {validationReport.attendance.completeEmployees}/{validationReport.attendance.totalEmployees}
                       </p>
                     </div>
-                    <div className="rounded-md border border-border px-3 py-2">
+                    <div className="rounded-lg border border-border px-3 py-3">
                       <p className="text-xs text-muted">Unrecorded Attendance</p>
                       <p className="text-sm font-semibold text-danger">
                         {validationReport.attendance.employeesWithMissingAttendance}
                       </p>
                     </div>
-                    <div className="rounded-md border border-border px-3 py-2">
+                    <div className="rounded-lg border border-border px-3 py-3">
                       <p className="text-xs text-muted">Negative Net Pay</p>
                       <p className="text-sm font-semibold text-danger">
                         {validationReport.payroll.employeesWithNegativeNetPay}
                       </p>
                     </div>
-                    <div className="rounded-md border border-border px-3 py-2">
+                    <div className="rounded-lg border border-border px-3 py-3">
                       <p className="text-xs text-muted">Rule Versions</p>
                       <p className={`text-sm font-semibold ${validationReport.statutory.isComplete ? 'text-success' : 'text-danger'}`}>
                         {validationReport.statutory.isComplete ? 'Complete' : `${validationReport.statutory.missingRules.length} missing`}
                       </p>
                     </div>
-                    <div className="rounded-md border border-border px-3 py-2">
+                    <div className="rounded-lg border border-border px-3 py-3">
                       <p className="text-xs text-muted">Leave Adjustments</p>
                       <p className="text-sm font-semibold text-ink">
                         {validationReport.leaveAdjustments.unappliedLeaveAdjustments} unapplied
                       </p>
                     </div>
-                    <div className="rounded-md border border-border px-3 py-2">
+                    <div className="rounded-lg border border-border px-3 py-3">
                       <p className="text-xs text-muted">Taxable Income</p>
                       <p className="text-sm font-semibold text-danger">
                         {validationReport.payroll.employeesWithInvalidTaxableIncome}
@@ -1092,14 +1379,15 @@ export default function PayrollPage() {
                     </div>
                   </div>
                 )}
+
                 {(selectedValidationIssues.length === 0 && warnings.length === 0) ? (
-                  <p className="rounded-md border border-border bg-neutral-20 px-3 py-2 text-sm text-muted">
+                  <p className="rounded-lg border border-border bg-neutral-20 px-4 py-4 text-sm text-muted">
                     No validation issues reported for this payroll period.
                   </p>
                 ) : (
-                  <div className="divide-y divide-border rounded-md border border-border">
+                  <div className="divide-y divide-border rounded-lg border border-border">
                     {(selectedValidationIssues.length ? selectedValidationIssues : warnings).map((warning) => (
-                      <div key={warning.code} className="flex items-start gap-3 px-3 py-3">
+                      <div key={warning.code} className="flex items-start gap-3 px-4 py-4">
                         <Badge variant={warning.severity === 'critical' ? 'danger' : warningBadgeVariant(warning.severity)}>
                           {warning.severity === 'critical' ? 'critical' : warning.severity}
                         </Badge>
@@ -1109,26 +1397,291 @@ export default function PayrollPage() {
                   </div>
                 )}
               </div>
-            </Card>
+            )}
 
-            {canViewAudit && (
-              <Card>
-                <CardHeader
-                  title="Audit History"
-                  subtitle="Latest period events"
-                  action={
-                    <button
-                      type="button"
-                      className="inline-flex items-center gap-2 text-xs text-muted hover:text-ink"
-                      onClick={() => setIsAuditCardOpen((value) => !value)}
-                      aria-expanded={isAuditCardOpen}
+            {workspaceTab === 'records' && (
+              <div className="space-y-4">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="text-base font-semibold text-ink">Payroll Records</h3>
+                    <p className="text-sm text-muted">
+                      {recordMeta.total} employee record{recordMeta.total === 1 ? '' : 's'}
+                    </p>
+                  </div>
+                  {isDetailLoading && <span className="text-sm text-muted">Loading details...</span>}
+                </div>
+
+                <div className="overflow-hidden rounded-lg border border-border">
+                  <Table
+                    data={records}
+                    rowKey={(record) => record.id}
+                    isLoading={isDetailLoading}
+                    emptyMessage="No payroll records have been generated for this period."
+                    columns={[
+                      {
+                        key: 'employee',
+                        header: 'Employee',
+                        render: (record) => (
+                          <div>
+                            <p className="text-sm font-medium text-ink">{employeeName(record)}</p>
+                            <p className="text-xs text-muted">{record.employee?.employeeNumber ?? record.employeeId}</p>
+                          </div>
+                        ),
+                      },
+                      {
+                        key: 'grossPay',
+                        header: 'Gross',
+                        render: (record) => (
+                          <div>
+                            <p className="text-sm">{formatPeso(record.grossPay)}</p>
+                            <p className="text-xs text-muted">{formatPeso(record.taxableEarnings)} taxable</p>
+                          </div>
+                        ),
+                      },
+                      {
+                        key: 'deductions',
+                        header: 'Deductions',
+                        render: (record) => (
+                          <div>
+                            <p className="text-sm text-danger">{formatPeso(record.totalDeductions)}</p>
+                            <p className="text-xs text-muted">{formatPeso(record.statutoryDeductions)} statutory</p>
+                          </div>
+                        ),
+                      },
+                      {
+                        key: 'leave',
+                        header: 'Leave',
+                        render: (record) => (
+                          <div className="text-sm">
+                            <p className="text-danger">{formatPeso(record.leaveDeduction)} leave</p>
+                          </div>
+                        ),
+                      },
+                      {
+                        key: 'offset',
+                        header: 'Offset',
+                        render: (record) => (
+                          <div className="text-xs text-muted">
+                            <p className="text-brand">{record.offsetEarnedMinutes}m earned</p>
+                            <p>{record.offsetUsedMinutes}m used · {record.offsetBalanceMinutes}m balance</p>
+                            <p className="text-warning">{record.undertimeMinutes}m undertime</p>
+                          </div>
+                        ),
+                      },
+                      {
+                        key: 'tax',
+                        header: 'Tax',
+                        render: (record) => (
+                          <div>
+                            <p className="text-sm">{formatPeso(record.taxableIncome)}</p>
+                            <p className="text-xs text-danger">{formatPeso(record.withholdingTax)} withheld</p>
+                          </div>
+                        ),
+                      },
+                      {
+                        key: 'employer',
+                        header: 'Employer Share',
+                        render: (record) => <span className="text-sm">{formatPeso(record.employerContributions)}</span>,
+                      },
+                      {
+                        key: 'netPay',
+                        header: 'Net',
+                        render: (record) => <span className="text-sm font-semibold">{formatPeso(record.netPay)}</span>,
+                      },
+                      {
+                        key: 'rules',
+                        header: 'Rule Version',
+                        render: (record) => (
+                          <span className="block max-w-[220px] text-xs text-muted">{shortRuleVersion(record.statutoryRuleVersion)}</span>
+                        ),
+                      },
+                      {
+                        key: 'status',
+                        header: 'Status',
+                        render: (record) => (
+                          <Badge variant={statusVariant[record.status] ?? 'neutral'} dot>
+                            {statusLabel(record.status)}
+                          </Badge>
+                        ),
+                      },
+                      {
+                        key: 'payslip',
+                        header: '',
+                        render: (record) => {
+                          const periodLocked = selectedPeriodLocked || ['released', 'locked'].includes(selectedPeriod.status)
+                          const recordClosed = record.isLocked || ['released', 'locked', 'cancelled', 'voided'].includes(record.status)
+                          const canVoidThisRecord = canVoidRecord && !periodLocked && !recordClosed
+                          return (
+                            <div className="flex items-center justify-end gap-2">
+                              {canViewAudit && (
+                                <Button
+                                  size="xs"
+                                  variant="ghost"
+                                  leftIcon={<History size={12} />}
+                                  isLoading={actionLoading === `snapshots:${record.id}`}
+                                  onClick={() => viewSnapshots(record)}
+                                >
+                                  Snapshots
+                                </Button>
+                              )}
+                              {canVoidRecord && (
+                                <Button
+                                  size="xs"
+                                  variant="danger"
+                                  leftIcon={<Ban size={12} />}
+                                  disabled={!canVoidThisRecord || Boolean(actionLoading)}
+                                  onClick={() => setVoidRecordConfirm({ record, confirmation: '', reason: '' })}
+                                >
+                                  Void
+                                </Button>
+                              )}
+                              <Button
+                                size="xs"
+                                variant="ghost"
+                                leftIcon={<Download size={12} />}
+                                isLoading={downloadingRecordId === record.id}
+                                disabled={!['released', 'locked'].includes(record.status) || Boolean(downloadingRecordId)}
+                                onClick={() => downloadPayslip(record)}
+                              >
+                                Payslip
+                              </Button>
+                            </div>
+                          )
+                        },
+                      },
+                    ]}
+                  />
+                  <Pagination
+                    page={recordPage}
+                    totalPages={recordMeta.totalPages}
+                    total={recordMeta.total}
+                    limit={recordMeta.limit}
+                    onPageChange={setRecordPage}
+                  />
+                </div>
+              </div>
+            )}
+
+            {workspaceTab === 'reports' && canViewReports && (
+              <div className="overflow-hidden rounded-lg border border-border">
+                <div className="flex flex-col gap-3 border-b border-border px-5 py-4 xl:flex-row xl:items-end xl:justify-between">
+                  <CardHeader
+                    title="Reports and Export Center"
+                    subtitle={report ? `Generated ${formatDateTime(report.generatedAt)}` : 'Backend-approved payroll records and calculation snapshots'}
+                    className="mb-0"
+                  />
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-4 xl:min-w-[820px]">
+                    <Input
+                      label="Employee Search"
+                      value={reportFilters.search}
+                      leftAddon={<Search size={14} />}
+                      onChange={(event) => setReportFilters((current) => ({ ...current, search: event.target.value }))}
+                      placeholder="Name or ID"
+                    />
+                    <Select
+                      label="Payroll Status"
+                      value={reportFilters.status}
+                      onChange={(event) => setReportFilters((current) => ({ ...current, status: event.target.value as 'all' | PayrollStatus }))}
                     >
-                      <History size={16} />
-                      {isAuditCardOpen ? 'Collapse' : 'Expand'}
-                      {isAuditCardOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                    </button>
-                  }
+                      <option value="all">All statuses</option>
+                      <option value="processed">Processed</option>
+                      <option value="approved">Approved</option>
+                      <option value="released">Released</option>
+                      <option value="locked">Locked</option>
+                    </Select>
+                    <Select
+                      label="Employment Status"
+                      value={reportFilters.employmentStatus}
+                      onChange={(event) => setReportFilters((current) => ({ ...current, employmentStatus: event.target.value }))}
+                    >
+                      <option value="all">All employment statuses</option>
+                      <option value="active">Active</option>
+                      <option value="inactive">Inactive / Former Employee</option>
+                      <option value="resigned">Resigned</option>
+                      <option value="terminated">Terminated</option>
+                      <option value="end_of_contract">End of Contract</option>
+                    </Select>
+                    <Button
+                      className="self-end"
+                      variant="outline"
+                      leftIcon={<Download size={14} />}
+                      disabled={!canExportReports || isReportLoading || !report}
+                      isLoading={actionLoading === `export:${reportType}`}
+                      onClick={exportReport}
+                    >
+                      Export CSV
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="border-b border-border px-5 py-3">
+                  <div className="flex flex-wrap gap-2">
+                    {reportTypes.map((item) => (
+                      <Button
+                        key={item.type}
+                        size="xs"
+                        variant={reportType === item.type ? 'primary' : 'outline'}
+                        onClick={() => setReportType(item.type)}
+                      >
+                        {item.label}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+
+                {report && (
+                  <div className="grid grid-cols-1 gap-3 border-b border-border px-5 py-4 sm:grid-cols-2 lg:grid-cols-4">
+                    {Object.entries(report.totals)
+                      .filter(([key]) => isMoneyColumn(key) || key === 'employee_count')
+                      .slice(0, 4)
+                      .map(([key, value]) => (
+                        <div key={key} className="rounded-md border border-border px-3 py-2">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-muted">{prettyColumn(key)}</p>
+                          <p className="mt-1 text-sm font-semibold text-ink">
+                            {key === 'employee_count' ? Number(value).toLocaleString() : formatPeso(value)}
+                          </p>
+                        </div>
+                      ))}
+                  </div>
+                )}
+
+                <Table
+                  data={report?.rows ?? []}
+                  rowKey={(_row, index) => `${reportType}-${index}`}
+                  isLoading={isReportLoading}
+                  emptyMessage="No report rows match the selected filters."
+                  columns={(report?.rows[0] ? Object.keys(report.rows[0]) : ['report'])
+                    .slice(0, 10)
+                    .map((key) => ({
+                      key,
+                      header: prettyColumn(key),
+                      render: (row: Record<string, unknown>) => (
+                        <span className="text-sm">{renderReportValue(key, row[key])}</span>
+                      ),
+                    }))}
                 />
+              </div>
+            )}
+
+            {workspaceTab === 'audit' && canViewAudit && (
+              <div className="space-y-4 rounded-lg border border-border p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="text-base font-semibold text-ink">Audit History</h3>
+                    <p className="text-sm text-muted">Latest period events and recorded reasons.</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-2 text-xs text-muted hover:text-ink"
+                    onClick={() => setIsAuditCardOpen((value) => !value)}
+                    aria-expanded={isAuditCardOpen}
+                  >
+                    <History size={16} />
+                    {isAuditCardOpen ? 'Collapse' : 'Expand'}
+                    {isAuditCardOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                  </button>
+                </div>
+
                 {isAuditCardOpen && (
                   selectedPeriod.auditHistory?.length ? (
                     <div className="space-y-3">
@@ -1163,268 +1716,10 @@ export default function PayrollPage() {
                     <p className="text-sm text-muted">No audit events recorded yet.</p>
                   )
                 )}
-              </Card>
+              </div>
             )}
           </div>
-
-          {canViewReports && (
-            <Card padding="none">
-              <div className="flex flex-col gap-3 border-b border-border px-5 py-4 xl:flex-row xl:items-end xl:justify-between">
-                <CardHeader
-                  title="Reports and Export Center"
-                  subtitle={report ? `Generated ${formatDateTime(report.generatedAt)}` : 'Backend-approved payroll records and calculation snapshots'}
-                  className="mb-0"
-                />
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-4 xl:min-w-[820px]">
-                  <Input
-                    label="Employee Search"
-                    value={reportFilters.search}
-                    leftAddon={<Search size={14} />}
-                    onChange={(event) => setReportFilters((current) => ({ ...current, search: event.target.value }))}
-                    placeholder="Name or ID"
-                  />
-                  <Select
-                    label="Payroll Status"
-                    value={reportFilters.status}
-                    onChange={(event) => setReportFilters((current) => ({ ...current, status: event.target.value as 'all' | PayrollStatus }))}
-                  >
-                    <option value="all">All statuses</option>
-                    <option value="processed">Processed</option>
-                    <option value="approved">Approved</option>
-                    <option value="released">Released</option>
-                    <option value="locked">Locked</option>
-                  </Select>
-                  <Select
-                    label="Employment Status"
-                    value={reportFilters.employmentStatus}
-                    onChange={(event) => setReportFilters((current) => ({ ...current, employmentStatus: event.target.value }))}
-                  >
-                    <option value="all">All employment statuses</option>
-                    <option value="active">Active</option>
-                    <option value="inactive">Inactive / Former Employee</option>
-                    <option value="resigned">Resigned</option>
-                    <option value="terminated">Terminated</option>
-                    <option value="end_of_contract">End of Contract</option>
-                  </Select>
-                  <Button
-                    className="self-end"
-                    variant="outline"
-                    leftIcon={<Download size={14} />}
-                    disabled={!canExportReports || isReportLoading || !report}
-                    isLoading={actionLoading === `export:${reportType}`}
-                    onClick={exportReport}
-                  >
-                    Export CSV
-                  </Button>
-                </div>
-              </div>
-
-              <div className="border-b border-border px-5 py-3">
-                <div className="flex flex-wrap gap-2">
-                  {reportTypes.map((item) => (
-                    <Button
-                      key={item.type}
-                      size="xs"
-                      variant={reportType === item.type ? 'primary' : 'outline'}
-                      onClick={() => setReportType(item.type)}
-                    >
-                      {item.label}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-
-              {report && (
-                <div className="grid grid-cols-1 gap-3 border-b border-border px-5 py-4 sm:grid-cols-2 lg:grid-cols-4">
-                  {Object.entries(report.totals)
-                    .filter(([key]) => isMoneyColumn(key) || key === 'employee_count')
-                    .slice(0, 4)
-                    .map(([key, value]) => (
-                      <div key={key} className="rounded-md border border-border px-3 py-2">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-muted">{prettyColumn(key)}</p>
-                        <p className="mt-1 text-sm font-semibold text-ink">
-                          {key === 'employee_count' ? Number(value).toLocaleString() : formatPeso(value)}
-                        </p>
-                      </div>
-                    ))}
-                </div>
-              )}
-
-              <Table
-                data={report?.rows ?? []}
-                rowKey={(_row, index) => `${reportType}-${index}`}
-                isLoading={isReportLoading}
-                emptyMessage="No report rows match the selected filters."
-                columns={(report?.rows[0] ? Object.keys(report.rows[0]) : ['report'])
-                  .slice(0, 10)
-                  .map((key) => ({
-                    key,
-                    header: prettyColumn(key),
-                    render: (row: Record<string, unknown>) => (
-                      <span className="text-sm">{renderReportValue(key, row[key])}</span>
-                    ),
-                  }))}
-              />
-            </Card>
-          )}
-
-          <Card padding="none">
-            <div className="flex flex-col gap-2 border-b border-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-              <CardHeader
-                title="Payroll Records"
-                subtitle={`${recordMeta.total} employee record${recordMeta.total === 1 ? '' : 's'}`}
-                className="mb-0"
-              />
-              {isDetailLoading && <span className="text-sm text-muted">Loading details...</span>}
-            </div>
-            <Table
-              data={records}
-              rowKey={(record) => record.id}
-              isLoading={isDetailLoading}
-              emptyMessage="No payroll records have been generated for this period."
-              columns={[
-                {
-                  key: 'employee',
-                  header: 'Employee',
-                  render: (record) => (
-                    <div>
-                      <p className="text-sm font-medium text-ink">{employeeName(record)}</p>
-                      <p className="text-xs text-muted">{record.employee?.employeeNumber ?? record.employeeId}</p>
-                    </div>
-                  ),
-                },
-                {
-                  key: 'grossPay',
-                  header: 'Gross',
-                  render: (record) => (
-                    <div>
-                      <p className="text-sm">{formatPeso(record.grossPay)}</p>
-                      <p className="text-xs text-muted">{formatPeso(record.taxableEarnings)} taxable</p>
-                    </div>
-                  ),
-                },
-                {
-                  key: 'deductions',
-                  header: 'Deductions',
-                  render: (record) => (
-                    <div>
-                      <p className="text-sm text-danger">{formatPeso(record.totalDeductions)}</p>
-                      <p className="text-xs text-muted">{formatPeso(record.statutoryDeductions)} statutory</p>
-                    </div>
-                  ),
-                },
-                {
-                  key: 'leave',
-                  header: 'Leave',
-                  render: (record) => (
-                    <div className="text-sm">
-                      <p className="text-danger">{formatPeso(record.leaveDeduction)} leave</p>
-                    </div>
-                  ),
-                },
-                {
-                  key: 'offset',
-                  header: 'Offset',
-                  render: (record) => (
-                    <div className="text-xs text-muted">
-                      <p className="text-brand">{record.offsetEarnedMinutes}m earned</p>
-                      <p>{record.offsetUsedMinutes}m used · {record.offsetBalanceMinutes}m balance</p>
-                      <p className="text-warning">{record.undertimeMinutes}m undertime</p>
-                    </div>
-                  ),
-                },
-                {
-                  key: 'tax',
-                  header: 'Tax',
-                  render: (record) => (
-                    <div>
-                      <p className="text-sm">{formatPeso(record.taxableIncome)}</p>
-                      <p className="text-xs text-danger">{formatPeso(record.withholdingTax)} withheld</p>
-                    </div>
-                  ),
-                },
-                {
-                  key: 'employer',
-                  header: 'Employer Share',
-                  render: (record) => <span className="text-sm">{formatPeso(record.employerContributions)}</span>,
-                },
-                {
-                  key: 'netPay',
-                  header: 'Net',
-                  render: (record) => <span className="text-sm font-semibold">{formatPeso(record.netPay)}</span>,
-                },
-                {
-                  key: 'rules',
-                  header: 'Rule Version',
-                  render: (record) => (
-                    <span className="block max-w-[220px] text-xs text-muted">{shortRuleVersion(record.statutoryRuleVersion)}</span>
-                  ),
-                },
-                {
-                  key: 'status',
-                  header: 'Status',
-                  render: (record) => (
-                    <Badge variant={statusVariant[record.status] ?? 'neutral'} dot>
-                      {statusLabel(record.status)}
-                    </Badge>
-                  ),
-                },
-                {
-                  key: 'payslip',
-                  header: '',
-                  render: (record) => {
-                    const periodLocked = selectedPeriod?.isLocked || ['released', 'locked'].includes(selectedPeriod?.status ?? '')
-                    const recordClosed = record.isLocked || ['released', 'locked', 'cancelled', 'voided'].includes(record.status)
-                    const canVoidThisRecord = canVoidRecord && !periodLocked && !recordClosed
-                    return (
-                      <div className="flex items-center justify-end gap-2">
-                        {canViewAudit && (
-                          <Button
-                            size="xs"
-                            variant="ghost"
-                            leftIcon={<History size={12} />}
-                            isLoading={actionLoading === `snapshots:${record.id}`}
-                            onClick={() => viewSnapshots(record)}
-                          >
-                            Snapshots
-                          </Button>
-                        )}
-                        {canVoidRecord && (
-                          <Button
-                            size="xs"
-                            variant="danger"
-                            leftIcon={<Ban size={12} />}
-                            disabled={!canVoidThisRecord || Boolean(actionLoading)}
-                            onClick={() => setVoidRecordConfirm({ record, confirmation: '', reason: '' })}
-                          >
-                            Void
-                          </Button>
-                        )}
-                        <Button
-                          size="xs"
-                          variant="ghost"
-                          leftIcon={<Download size={12} />}
-                          isLoading={downloadingRecordId === record.id}
-                          disabled={!['released', 'locked'].includes(record.status) || Boolean(downloadingRecordId)}
-                          onClick={() => downloadPayslip(record)}
-                        >
-                          Payslip
-                        </Button>
-                      </div>
-                    )
-                  },
-                },
-              ]}
-            />
-            <Pagination
-              page={recordPage}
-              totalPages={recordMeta.totalPages}
-              total={recordMeta.total}
-              limit={recordMeta.limit}
-              onPageChange={setRecordPage}
-            />
-          </Card>
-        </>
+        </Card>
       )}
 
       <Modal
